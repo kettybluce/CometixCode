@@ -124,8 +124,9 @@ cometix mcp logout <name>
 ```
 
 `--no-browser` prints the authorization URL and waits for the redirect URL on
-stdin. Standard MCP OAuth credentials are stored in `.credentials.json` under
-the configured Claude directory; Claude account OAuth remains a separate flow.
+stdin. Standard MCP OAuth credentials use the configured secure store (macOS
+Keychain with `.credentials.json` fallback; `.credentials.json` on other
+platforms). Claude account OAuth remains a separate flow.
 
 ### Cross-compiling for Windows
 

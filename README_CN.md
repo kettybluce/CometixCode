@@ -114,7 +114,8 @@ cometix mcp logout <name>
 ```
 
 `--no-browser` 会打印授权 URL，并等待从 stdin 粘贴回调 URL。标准 MCP OAuth
-凭据保存在配置目录的 `.credentials.json` 中；Claude 账号 OAuth 仍由独立的账号认证流程管理。
+凭据使用配置的安全存储（macOS 优先使用 Keychain，并以 `.credentials.json` 作为
+fallback；其他平台使用配置目录下的 `.credentials.json`）。Claude 账号 OAuth 仍由独立的账号认证流程管理。
 
 ### 交叉编译 Windows 版
 
