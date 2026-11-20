@@ -56,6 +56,7 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             "add-json" => print_mcp_add_json_help(),
             "get" => print_mcp_get_help(),
             "list" => print_mcp_list_help(),
+            "remove" => print_mcp_remove_help(),
             _ => return None,
         }
         return Some(0);
@@ -80,6 +81,13 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
                 } else {
                     eprintln!("Error: {error}");
                 }
+                1
+            }
+        }),
+        "remove" => Some(match run_mcp_remove_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
                 1
             }
         }),
@@ -110,6 +118,12 @@ fn print_mcp_get_help() {
 
 fn print_mcp_list_help() {
     println!("Usage: cometix mcp list\n\nList configured MCP servers and check approved servers.");
+}
+
+fn print_mcp_remove_help() {
+    println!(
+        "Usage: cometix mcp remove [options] <name>\n\nRemove an MCP server\n\nOptions:\n  -h, --help           Display help for command\n  -s, --scope <scope>  Configuration scope (local, user, or project); if not\n                       set, removes it from whichever scope has it"
+    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -501,6 +515,46 @@ fn run_mcp_get_cli(args: &[String]) -> anyhow::Result<()> {
     crate::utils::process_runtime::set_process_runtime_handle(runtime.handle().clone());
     let (state, issue) = mcp_get_connection(&runtime, name, &config, &project_config);
     print_mcp_get_details(name, &config, state, issue.as_deref());
+    Ok(())
+}
+
+fn run_mcp_remove_cli(args: &[String]) -> anyhow::Result<()> {
+    let mut scope = None;
+    let mut names = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "-s" || arg == "--scope" {
+            let value = args.get(index + 1).ok_or_else(|| {
+                anyhow::anyhow!("error: option '-s, --scope <scope>' argument missing")
+            })?;
+            scope = (!value.is_empty()).then_some(value.as_str());
+            index += 2;
+        } else if let Some(value) = arg.strip_prefix("--scope=") {
+            scope = (!value.is_empty()).then_some(value);
+            index += 1;
+        } else if arg.starts_with('-') {
+            anyhow::bail!("error: unknown option '{arg}'");
+        } else {
+            names.push(arg.as_str());
+            index += 1;
+        }
+    }
+    let Some(name) = names.first() else {
+        anyhow::bail!("error: missing required argument 'name'");
+    };
+
+    let removed = crate::services::mcp::config::remove_mcp_server_config(name, scope)?;
+    let display_name = if removed.scope == crate::services::mcp::types::ConfigScope::User {
+        format!("\"{name}\"")
+    } else {
+        name.to_string()
+    };
+    println!(
+        "Removed MCP server {display_name} from {} config",
+        removed.scope.as_str()
+    );
+    println!("File modified: {}", removed.path.display());
     Ok(())
 }
 

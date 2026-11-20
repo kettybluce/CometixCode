@@ -205,10 +205,7 @@ fn inline_json_adds_to_user_and_project_scopes() {
 #[test]
 fn empty_and_oversized_stdin_are_rejected_without_creating_config() {
     let fixture = Fixture::new();
-    assert_exit(
-        fixture.run(&["docs", "-"], Some(b" \n\t"), &[]),
-        false,
-    );
+    assert_exit(fixture.run(&["docs", "-"], Some(b" \n\t"), &[]), false);
     assert!(!fixture.global_file().exists());
 
     let oversized = vec![b' '; 1024 * 1024 + 1];
@@ -616,4 +613,291 @@ fn mcp_get_reports_missing_server() {
         stderr.contains("No MCP server named \"missing\". Run \"claude mcp add\" to add one."),
         "stderr={stderr}"
     );
+}
+
+#[test]
+fn mcp_remove_deletes_user_server_and_preserves_other_configuration() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "otherSetting": {"keep": true},
+            "mcpServers": {
+                "remove-me": {"command": "/bin/false"},
+                "keep-me": {"command": "/bin/false"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let original_project = json!({
+        "otherProjectSetting": true,
+        "mcpServers": {"project-keep": {"command": "/bin/false"}}
+    });
+    fs::write(
+        fixture.project_file(),
+        serde_json::to_vec(&original_project).unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(
+        &["mcp", "remove"],
+        &["remove-me", "ignored-extra", "--scope="],
+        None,
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        stdout.contains("Removed MCP server \"remove-me\" from user config"),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("File modified:"), "stdout={stdout}");
+    let saved = read_json(&fixture.global_file());
+    assert_eq!(saved["otherSetting"]["keep"], true);
+    assert!(saved["mcpServers"].get("remove-me").is_none());
+    assert!(saved["mcpServers"].get("keep-me").is_some());
+    assert_eq!(read_json(&fixture.project_file()), original_project);
+}
+
+#[test]
+fn mcp_remove_deletes_project_and_local_scopes_explicitly() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "projects": {
+                (fixture.repo.canonicalize().unwrap().to_string_lossy().as_ref()): {
+                    "otherProjectState": 7,
+                    "mcpServers": {
+                        "local-me": {"command": "/bin/false"},
+                        "local-keep": {"command": "/bin/false"}
+                    }
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        fixture.project_file(),
+        serde_json::to_vec(&json!({
+            "otherProjectFileSetting": "keep",
+            "mcpServers": {
+                "project-me": {"command": "/bin/false"},
+                "project-keep": {"command": "/bin/false"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let local = fixture.run_command(
+        &["mcp", "remove"],
+        &["local-me", "--scope", "local"],
+        None,
+        &[],
+    );
+    assert!(
+        local.status.success(),
+        "{}",
+        String::from_utf8_lossy(&local.stderr)
+    );
+    assert!(String::from_utf8_lossy(&local.stdout).contains("from local config"));
+    let project_key = fixture
+        .repo
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let global = read_json(&fixture.global_file());
+    assert_eq!(global["projects"][&project_key]["otherProjectState"], 7);
+    assert!(
+        global["projects"][&project_key]["mcpServers"]
+            .get("local-me")
+            .is_none()
+    );
+    assert!(
+        global["projects"][&project_key]["mcpServers"]
+            .get("local-keep")
+            .is_some()
+    );
+
+    let project = fixture.run_command(
+        &["mcp", "remove"],
+        &["project-me", "-s", "project"],
+        None,
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&project.stdout);
+    assert!(project.status.success(), "{stdout}");
+    assert!(stdout.contains("from project config"), "{stdout}");
+    let saved_project = read_json(&fixture.project_file());
+    assert_eq!(saved_project["otherProjectFileSetting"], "keep");
+    assert!(saved_project["mcpServers"].get("project-me").is_none());
+    assert!(saved_project["mcpServers"].get("project-keep").is_some());
+}
+
+#[test]
+fn mcp_remove_without_scope_refuses_ambiguous_server_without_mutation() {
+    let fixture = Fixture::new();
+    let project_key = fixture
+        .repo
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let global_original = json!({
+        "mcpServers": {"same": {"command": "/bin/false"}},
+        "projects": {
+            (project_key.as_str()): {
+                "mcpServers": {"same": {"command": "/bin/false"}}
+            }
+        }
+    });
+    fs::write(
+        &fixture.global_file(),
+        serde_json::to_vec(&global_original).unwrap(),
+    )
+    .unwrap();
+    let project_original = json!({
+        "mcpServers": {"same": {"command": "/bin/false"}}
+    });
+    fs::write(
+        &fixture.project_file(),
+        serde_json::to_vec(&project_original).unwrap(),
+    )
+    .unwrap();
+    let global_bytes = fs::read(fixture.global_file()).unwrap();
+    let project_bytes = fs::read(fixture.project_file()).unwrap();
+
+    let output = fixture.run_command(&["mcp", "remove"], &["same"], None, &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("MCP server \"same\" exists in multiple scopes:"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("- Local config (private to you in this project)"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("- Project config (shared via .mcp.json)"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("- User config (available in all your projects)"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(fixture.global_file()).unwrap(), global_bytes);
+    assert_eq!(fs::read(fixture.project_file()).unwrap(), project_bytes);
+}
+
+#[test]
+fn mcp_remove_reports_missing_invalid_scope_and_managed_protection() {
+    let fixture = Fixture::new();
+
+    let missing = fixture.run_command(&["mcp", "remove"], &["missing"], None, &[]);
+    assert!(!missing.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&missing.stderr).trim(),
+        "No MCP server named \"missing\". Run `claude mcp add` to add one."
+    );
+
+    let invalid = fixture.run_command(&["mcp", "remove"], &["missing", "-s", "bogus"], None, &[]);
+    assert!(!invalid.status.success());
+    assert!(String::from_utf8_lossy(&invalid.stderr)
+        .contains("Invalid scope: bogus. Must be one of: local, user, project, dynamic, enterprise, claudeai, managed, agent"));
+
+    let managed = fixture.run_command(&["mcp", "remove"], &["missing", "-s", "managed"], None, &[]);
+    assert!(!managed.status.success());
+    assert!(
+        String::from_utf8_lossy(&managed.stderr)
+            .contains("Cannot remove MCP server from scope: managed")
+    );
+}
+
+#[test]
+fn mcp_remove_suggests_close_names_and_lists_unrelated_servers() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "existing": {"command": "/bin/false"},
+                "docs": {"command": "/bin/false"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let original = fs::read(fixture.global_file()).unwrap();
+
+    let typo = fixture.run_command(&["mcp", "remove"], &["exiting"], None, &[]);
+    assert!(!typo.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&typo.stderr).trim(),
+        "No MCP server named \"exiting\". Did you mean \"existing\"? Run `claude mcp list` to see all."
+    );
+
+    let unrelated = fixture.run_command(&["mcp", "remove"], &["xyz"], None, &[]);
+    assert!(!unrelated.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&unrelated.stderr).trim(),
+        "No MCP server named \"xyz\". Configured servers: docs, existing"
+    );
+    assert_eq!(fs::read(fixture.global_file()).unwrap(), original);
+}
+
+#[test]
+fn mcp_remove_matches_cli_argument_error_boundaries() {
+    let fixture = Fixture::new();
+
+    let missing_name = fixture.run_command(&["mcp", "remove"], &[], None, &[]);
+    assert!(!missing_name.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&missing_name.stderr).trim(),
+        "error: missing required argument 'name'"
+    );
+
+    let missing_scope = fixture.run_command(&["mcp", "remove"], &["missing", "--scope"], None, &[]);
+    assert!(!missing_scope.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&missing_scope.stderr).trim(),
+        "error: option '-s, --scope <scope>' argument missing"
+    );
+
+    let unknown_option =
+        fixture.run_command(&["mcp", "remove"], &["missing", "--bogus"], None, &[]);
+    assert!(!unknown_option.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&unknown_option.stderr).trim(),
+        "error: unknown option '--bogus'"
+    );
+}
+
+#[test]
+fn mcp_remove_respects_disabled_write_gate() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({"mcpServers": {"probe": {"command": "/bin/false"}}})).unwrap(),
+    )
+    .unwrap();
+    let original = fs::read(fixture.global_file()).unwrap();
+
+    let output = fixture.run_command(
+        &["mcp", "remove"],
+        &["probe"],
+        None,
+        &[("COMETIX_WRITE_ENABLED", "0")],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("configuration writes are disabled by COMETIX_WRITE_ENABLED=0")
+    );
+    assert_eq!(fs::read(fixture.global_file()).unwrap(), original);
 }

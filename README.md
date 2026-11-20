@@ -93,6 +93,14 @@ cometix mcp get <name>
 Pending `.mcp.json` servers are reported as pending approval without a connection attempt. Approved servers are health-checked unless disabled for the current project.
 Transport details follow Claude Code's output, including configured URLs, headers, and environment values.
 
+Remove one configured server:
+
+```sh
+cometix mcp remove [--scope local|user|project] <name>
+```
+
+Without `--scope`, removal proceeds only when the server exists in exactly one removable scope. A server managed by an organization cannot be removed locally.
+
 ### Cross-compiling for Windows
 
 ```sh

@@ -83,6 +83,14 @@ cometix mcp get <name>
 未批准的 `.mcp.json` server 会显示为待批准且不会发起连接；已批准的 server 会检查健康状态，除非它在当前项目中被禁用。
 传输详情与 Claude Code 的输出一致，会显示已配置的 URL、headers 和环境变量值。
 
+删除一个已配置的 server：
+
+```sh
+cometix mcp remove [--scope local|user|project] <name>
+```
+
+省略 `--scope` 时，只有 server 唯一存在于一个可删除范围才会执行；组织管理的 server 不能在本机删除。
+
 ### 交叉编译 Windows 版
 
 需要 mingw-w64 工具链。

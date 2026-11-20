@@ -1018,10 +1018,7 @@ pub fn add_mcp_server_config(name: &str, server: &Value, scope: ConfigScope) -> 
                     }
                     _ => unreachable!(),
                 };
-                validate_existing_mcp_servers(
-                    &Value::Object(servers.clone()),
-                    scope.as_str(),
-                )?;
+                validate_existing_mcp_servers(&Value::Object(servers.clone()), scope.as_str())?;
                 if servers.contains_key(name) {
                     anyhow::bail!(
                         "MCP server '{name}' already exists in {scope_name}",
@@ -1040,6 +1037,283 @@ pub fn add_mcp_server_config(name: &str, server: &Value, scope: ConfigScope) -> 
             "MCP servers cannot be added to the {} scope",
             scope.as_str()
         ),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedMcpServerConfig {
+    pub scope: ConfigScope,
+    pub path: PathBuf,
+    pub config: ScopedMcpServerConfig,
+}
+
+fn parse_remove_scope(scope: &str) -> anyhow::Result<ConfigScope> {
+    match scope {
+        "local" => Ok(ConfigScope::Local),
+        "user" => Ok(ConfigScope::User),
+        "project" => Ok(ConfigScope::Project),
+        "dynamic" | "enterprise" | "claudeai" | "managed" | "agent" => {
+            anyhow::bail!("Cannot remove MCP server from scope: {scope}")
+        }
+        _ => anyhow::bail!(
+            "Invalid scope: {scope}. Must be one of: local, user, project, dynamic, enterprise, claudeai, managed, agent"
+        ),
+    }
+}
+
+fn remove_mcp_json_file(path: &Path, name: &str) -> anyhow::Result<()> {
+    crate::utils::config::with_config_lock(path, || {
+        let content = std::fs::read_to_string(path)
+            .map_err(|error| anyhow::anyhow!("Failed to read {}: {error}", path.display()))?;
+        let mut config = serde_json::from_str::<Value>(&content)
+            .map_err(|error| anyhow::anyhow!("Failed to parse {}: {error}", path.display()))?;
+        let root = ensure_json_object(&mut config, ".mcp.json")?;
+        let servers = ensure_json_object(
+            root.entry("mcpServers")
+                .or_insert_with(|| serde_json::json!({})),
+            "project mcpServers",
+        )?;
+        if servers.remove(name).is_none() {
+            anyhow::bail!("No MCP server named \"{name}\" in project scope");
+        }
+        let json = serde_json::to_vec_pretty(&config)?;
+        crate::utils::file::write_file_sync_and_flush_to_target_with_mode(
+            path,
+            &json,
+            Some(0o600),
+        )?;
+        Ok(())
+    })
+}
+
+fn project_mcp_server_path_and_config(name: &str) -> Option<(PathBuf, ScopedMcpServerConfig)> {
+    current_project_mcp_dirs()
+        .into_iter()
+        .rev()
+        .filter_map(|directory| {
+            let path = directory.join(".mcp.json");
+            let config =
+                parse_mcp_config_from_file_path_readonly(&path, true, ConfigScope::Project)
+                    .servers
+                    .get(name)
+                    .cloned()?;
+            Some((path, config))
+        })
+        .next()
+}
+
+fn remove_mcp_global_scope(
+    name: &str,
+    scope: ConfigScope,
+    project_key: &str,
+) -> anyhow::Result<()> {
+    crate::utils::config::update_global_config_value(|config| {
+        let object = config
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("global configuration root must be a JSON object"))?;
+        let servers = match scope {
+            ConfigScope::User => object
+                .get_mut("mcpServers")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| anyhow::anyhow!("MCP server configuration is missing"))?,
+            ConfigScope::Local => object
+                .get_mut("projects")
+                .and_then(Value::as_object_mut)
+                .and_then(|projects| projects.get_mut(project_key))
+                .and_then(Value::as_object_mut)
+                .and_then(|project| project.get_mut("mcpServers"))
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| anyhow::anyhow!("MCP server configuration is missing"))?,
+            _ => anyhow::bail!("Cannot remove MCP server from scope: {}", scope.as_str()),
+        };
+        if servers.remove(name).is_none() {
+            anyhow::bail!("No MCP server named \"{name}\" in {} scope", scope.as_str());
+        }
+        Ok(())
+    })
+}
+
+/// Remove one user/local/project MCP server while preserving every other JSON
+/// field in its owning file. Without an explicit scope, exactly one removable
+/// match is required; managed enterprise entries are never deleted locally.
+pub fn remove_mcp_server_config(
+    name: &str,
+    requested_scope: Option<&str>,
+) -> anyhow::Result<RemovedMcpServerConfig> {
+    if !crate::utils::env_utils::is_cometix_write_enabled() {
+        anyhow::bail!("configuration writes are disabled by COMETIX_WRITE_ENABLED=0");
+    }
+
+    let global_config = crate::utils::config::load_global_config();
+    let project_config = crate::utils::config::get_current_project_config();
+    let project_key = crate::utils::config::normalize_project_path(
+        &crate::utils::config::get_project_path_for_config().to_string_lossy(),
+    );
+    let global_path = crate::utils::env::get_global_claude_file();
+    let user =
+        get_mcp_configs_by_scope_readonly(ConfigScope::User, &global_config, &project_config)
+            .servers
+            .get(name)
+            .cloned();
+    let local =
+        get_mcp_configs_by_scope_readonly(ConfigScope::Local, &global_config, &project_config)
+            .servers
+            .get(name)
+            .cloned();
+    let project = project_mcp_server_path_and_config(name);
+    let enterprise =
+        get_mcp_configs_by_scope_readonly(ConfigScope::Enterprise, &global_config, &project_config)
+            .servers
+            .get(name)
+            .cloned();
+
+    let mut candidates = Vec::new();
+    if let Some(config) = local {
+        candidates.push((
+            ConfigScope::Local,
+            crate::services::mcp::utils::describe_mcp_config_file_path(ConfigScope::Local).into(),
+            config,
+        ));
+    }
+    if let Some((path, config)) = project {
+        candidates.push((ConfigScope::Project, path, config));
+    }
+    if let Some(config) = user {
+        candidates.push((ConfigScope::User, global_path.clone(), config));
+    }
+
+    let selected = if let Some(scope) = requested_scope {
+        let scope = parse_remove_scope(scope)?;
+        candidates
+            .into_iter()
+            .find(|(candidate_scope, _, _)| *candidate_scope == scope)
+            .ok_or_else(|| {
+                anyhow::anyhow!("No MCP server named \"{name}\" in {} scope", scope.as_str())
+            })?
+    } else {
+        match candidates.len() {
+            0 => {
+                if enterprise.is_some() {
+                    anyhow::bail!(
+                        "MCP server \"{name}\" is provided by your organization (enterprise settings) and cannot be removed locally."
+                    );
+                }
+                let configured = configured_mcp_server_names(&global_config, &project_config);
+                anyhow::bail!(mcp_remove_not_found_message(name, &configured));
+            }
+            1 => candidates.remove(0),
+            _ => return Err(mcp_remove_ambiguous_error(name, &candidates)),
+        }
+    };
+
+    let (scope, path, config) = selected;
+    match scope {
+        ConfigScope::Project => remove_mcp_json_file(&path, name)?,
+        ConfigScope::Local | ConfigScope::User => {
+            remove_mcp_global_scope(name, scope, &project_key)?;
+        }
+        _ => unreachable!(),
+    }
+    let _ = crate::services::mcp::auth::clear_mcp_client_config(name, &config);
+    Ok(RemovedMcpServerConfig {
+        scope,
+        path,
+        config,
+    })
+}
+
+fn configured_mcp_server_names(
+    global_config: &GlobalConfig,
+    project_config: &ProjectConfig,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for scope in [ConfigScope::Local, ConfigScope::Project, ConfigScope::User] {
+        for name in get_mcp_configs_by_scope_readonly(scope, global_config, project_config)
+            .servers
+            .keys()
+        {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+fn mcp_remove_not_found_message(name: &str, configured: &[String]) -> String {
+    if configured.is_empty() {
+        return format!("No MCP server named \"{name}\". Run `claude mcp add` to add one.");
+    }
+
+    if let Some(suggestion) = configured
+        .iter()
+        .filter_map(|candidate| {
+            let distance = levenshtein_distance(&name.to_lowercase(), &candidate.to_lowercase());
+            let threshold = (candidate.chars().count() / 3).max(2);
+            (distance <= threshold).then_some((distance, candidate))
+        })
+        .min_by_key(|(distance, candidate)| (*distance, candidate.as_str()))
+        .map(|(_, candidate)| candidate)
+    {
+        return format!(
+            "No MCP server named \"{name}\". Did you mean \"{suggestion}\"? Run `claude mcp list` to see all."
+        );
+    }
+
+    format!(
+        "No MCP server named \"{name}\". Configured servers: {}",
+        configured.join(", ")
+    )
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    let right_chars: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right_chars.len()).collect();
+    let mut current = vec![0; right_chars.len() + 1];
+
+    for (left_index, left_char) in left.chars().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right_chars.iter().enumerate() {
+            let substitution = previous[right_index] + usize::from(left_char != *right_char);
+            let insertion = current[right_index] + 1;
+            let deletion = previous[right_index + 1] + 1;
+            current[right_index + 1] = substitution.min(insertion).min(deletion);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right_chars.len()]
+}
+
+fn mcp_remove_ambiguous_error(
+    name: &str,
+    candidates: &[(ConfigScope, PathBuf, ScopedMcpServerConfig)],
+) -> anyhow::Error {
+    let mut message = format!("MCP server \"{name}\" exists in multiple scopes:\n");
+    for (scope, path, _) in candidates {
+        message.push_str(&format!(
+            "  - {} ({})\n",
+            mcp_remove_scope_label(*scope),
+            path.display()
+        ));
+    }
+    message.push_str("\nTo remove from a specific scope, use:");
+    for (scope, _, _) in candidates {
+        message.push_str(&format!(
+            "\n  claude mcp remove {name} -s {}",
+            scope.as_str()
+        ));
+    }
+    anyhow::anyhow!(message)
+}
+
+fn mcp_remove_scope_label(scope: ConfigScope) -> &'static str {
+    match scope {
+        ConfigScope::Local => "Local config (private to you in this project)",
+        ConfigScope::Project => "Project config (shared via .mcp.json)",
+        ConfigScope::User => "User config (available in all your projects)",
+        _ => scope.as_str(),
     }
 }
 

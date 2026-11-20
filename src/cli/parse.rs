@@ -696,6 +696,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_mcp_remove_is_a_live_noninteractive_subcommand() {
+        let c = parse_cli_config(&argv(&["mcp", "remove", "docs", "--scope", "user"]));
+        assert_eq!(c.subcommand.as_deref(), Some("mcp"));
+        assert!(c.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
     fn parse_unknown_flag() {
         let c = parse_cli_config(&argv(&["--not-a-real-flag"]));
         assert_eq!(c.unknown_flags, vec!["--not-a-real-flag".to_string()]);
