@@ -57,6 +57,7 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             "get" => print_mcp_get_help(),
             "list" => print_mcp_list_help(),
             "remove" => print_mcp_remove_help(),
+            "reset-project-choices" => print_mcp_reset_project_choices_help(),
             _ => return None,
         }
         return Some(0);
@@ -85,6 +86,13 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             }
         }),
         "remove" => Some(match run_mcp_remove_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        }),
+        "reset-project-choices" => Some(match run_mcp_reset_project_choices_cli(args) {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("{error}");
@@ -123,6 +131,12 @@ fn print_mcp_list_help() {
 fn print_mcp_remove_help() {
     println!(
         "Usage: cometix mcp remove [options] <name>\n\nRemove an MCP server\n\nOptions:\n  -h, --help           Display help for command\n  -s, --scope <scope>  Configuration scope (local, user, or project); if not\n                       set, removes it from whichever scope has it"
+    );
+}
+
+fn print_mcp_reset_project_choices_help() {
+    println!(
+        "Usage: cometix mcp reset-project-choices [options]\n\nReset all approved and rejected project-scoped (.mcp.json) servers within this\nproject\n\nOptions:\n  -h, --help  Display help for command"
     );
 }
 
@@ -555,6 +569,22 @@ fn run_mcp_remove_cli(args: &[String]) -> anyhow::Result<()> {
         removed.scope.as_str()
     );
     println!("File modified: {}", removed.path.display());
+    Ok(())
+}
+
+fn run_mcp_reset_project_choices_cli(args: &[String]) -> anyhow::Result<()> {
+    if let Some(option) = args.iter().find(|arg| arg.starts_with('-')) {
+        anyhow::bail!("error: unknown option '{option}'");
+    }
+
+    let has_project_servers =
+        crate::services::mcp_server_approval::reset_project_mcpjson_approval_choices()?;
+    println!(
+        "Project-scoped (.mcp.json) server approvals and rejections stored for this project have been reset."
+    );
+    if has_project_servers {
+        println!("You will be prompted for approval next time you start Claude Code.");
+    }
     Ok(())
 }
 

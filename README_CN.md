@@ -91,6 +91,12 @@ cometix mcp remove [--scope local|user|project] <name>
 
 省略 `--scope` 时，只有 server 唯一存在于一个可删除范围才会执行；组织管理的 server 不能在本机删除。
 
+重置当前项目对 `.mcp.json` server 的批准和拒绝选择：
+
+```sh
+cometix mcp reset-project-choices
+```
+
 ### 交叉编译 Windows 版
 
 需要 mingw-w64 工具链。

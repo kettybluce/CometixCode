@@ -101,6 +101,12 @@ cometix mcp remove [--scope local|user|project] <name>
 
 Without `--scope`, removal proceeds only when the server exists in exactly one removable scope. A server managed by an organization cannot be removed locally.
 
+Reset the current project's approved and rejected `.mcp.json` server choices:
+
+```sh
+cometix mcp reset-project-choices
+```
+
 ### Cross-compiling for Windows
 
 ```sh

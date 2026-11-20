@@ -26,6 +26,87 @@ pub enum McpjsonServerApprovalChoice {
     No,
 }
 
+/// Reset only the legacy project-scoped `.mcp.json` approval choices stored
+/// in the current project's `.claude.json` entry.
+pub fn reset_project_mcpjson_approval_choices() -> anyhow::Result<bool> {
+    if !crate::utils::env_utils::is_cometix_write_enabled() {
+        anyhow::bail!("configuration writes are disabled by COMETIX_WRITE_ENABLED=0");
+    }
+
+    // Validate the global config before touching project-local settings so a
+    // malformed `.claude.json` cannot leave the two approval stores half reset.
+    crate::utils::config::update_global_config_value(|_| Ok(()))?;
+    reset_local_mcpjson_approval_settings()?;
+    let global_config = crate::utils::config::load_global_config();
+    let project_config = crate::utils::config::get_current_project_config();
+    let has_project_servers = !crate::services::mcp::config::get_mcp_configs_by_scope_readonly(
+        crate::services::mcp::types::ConfigScope::Project,
+        &global_config,
+        &project_config,
+    )
+    .servers
+    .is_empty();
+    let project_key = crate::utils::config::normalize_project_path(
+        &crate::utils::config::get_project_path_for_config().to_string_lossy(),
+    );
+
+    crate::utils::config::update_global_config_value(|config| {
+        let Some(project) = config
+            .as_object_mut()
+            .and_then(|root| root.get_mut("projects"))
+            .and_then(Value::as_object_mut)
+            .and_then(|projects| projects.get_mut(&project_key))
+            .and_then(Value::as_object_mut)
+        else {
+            return Ok(());
+        };
+        project.remove("enabledMcpjsonServers");
+        project.remove("disabledMcpjsonServers");
+        project.remove("enableAllProjectMcpServers");
+        Ok(())
+    })?;
+
+    Ok(has_project_servers)
+}
+
+fn reset_local_mcpjson_approval_settings() -> anyhow::Result<()> {
+    let path = get_settings_file_path_for_source(SettingSource::Local)
+        .ok_or_else(|| anyhow::anyhow!("local settings path is unavailable"))?;
+    if !path.exists() {
+        return Ok(());
+    }
+    crate::utils::config::with_config_lock(&path, || {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut value =
+            serde_json::from_str::<Value>(content.strip_prefix('\u{feff}').unwrap_or(&content))
+                .map_err(|error| anyhow::anyhow!("Failed to parse {}: {error}", path.display()))?;
+        let object = value.as_object_mut().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Configuration file {} must contain a JSON object",
+                path.display()
+            )
+        })?;
+        let mut changed = false;
+        changed |= object.remove("enabledMcpjsonServers").is_some();
+        changed |= object.remove("disabledMcpjsonServers").is_some();
+        changed |= object.remove("enableAllProjectMcpServers").is_some();
+        if changed {
+            let serialized = format!("{}\n", serde_json::to_string_pretty(&value)?);
+            crate::utils::file::write_file_sync_and_flush_to_target_with_mode(
+                &path,
+                serialized.as_bytes(),
+                Some(0o600),
+            )?;
+            crate::utils::settings::settings_cache::reset_settings_cache();
+        }
+        Ok(())
+    })
+}
+
 fn push_unique(list: &mut Option<Vec<String>>, value: impl Into<String>) {
     let value = value.into();
     let entries = list.get_or_insert_with(Vec::new);

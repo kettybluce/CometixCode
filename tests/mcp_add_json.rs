@@ -901,3 +901,203 @@ fn mcp_remove_respects_disabled_write_gate() {
     );
     assert_eq!(fs::read(fixture.global_file()).unwrap(), original);
 }
+
+#[test]
+fn mcp_reset_project_choices_only_clears_current_project_legacy_lists() {
+    let fixture = Fixture::new();
+    let current_project_key = fixture
+        .repo
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let other_project_key = fixture
+        .root
+        .join("other-repo")
+        .to_string_lossy()
+        .to_string();
+    let global = json!({
+        "projects": {
+            (current_project_key.as_str()): {
+                "enabledMcpjsonServers": ["approved"],
+                "disabledMcpjsonServers": ["rejected"],
+                "enableAllProjectMcpServers": true,
+                "keep": {"value": 1}
+            },
+            (other_project_key.as_str()): {
+                "enabledMcpjsonServers": ["other-approved"],
+                "disabledMcpjsonServers": ["other-rejected"],
+                "keep": "other-project"
+            }
+        },
+        "mcpServers": {"user-server": {"command": "/bin/false"}},
+        "enabledMcpjsonServers": ["user-approved"],
+        "disabledMcpjsonServers": ["user-rejected"]
+    });
+    fs::write(fixture.global_file(), serde_json::to_vec(&global).unwrap()).unwrap();
+    let project_file = br#"{"mcpServers":{"approved":{"command":"/bin/false"}}}"#;
+    fs::write(fixture.project_file(), project_file).unwrap();
+    let local_settings_path = fixture.cwd.join(".claude/settings.local.json");
+    fs::create_dir_all(local_settings_path.parent().unwrap()).unwrap();
+    let local_settings = br#"{"enabledMcpjsonServers":["local-approval"],"disabledMcpjsonServers":["local-rejected"],"enableAllProjectMcpServers":true,"keep":true}"#;
+    fs::write(&local_settings_path, local_settings).unwrap();
+    let shared_settings_path = fixture.cwd.join(".claude/settings.json");
+    let shared_settings = br#"{"enabledMcpjsonServers":["shared-approval"],"disabledMcpjsonServers":["shared-rejected"],"enableAllProjectMcpServers":true,"keep":true}"#;
+    fs::write(&shared_settings_path, shared_settings).unwrap();
+
+    let output = fixture.run_command(
+        &["mcp", "reset-project-choices"],
+        &["ignored-extra"],
+        None,
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert_eq!(
+        stdout,
+        "Project-scoped (.mcp.json) server approvals and rejections stored for this project have been reset.\nYou will be prompted for approval next time you start Claude Code.\n"
+    );
+    assert!(stderr.is_empty(), "stderr={stderr}");
+
+    let saved = read_json(&fixture.global_file());
+    let current = &saved["projects"][&current_project_key];
+    assert!(current.get("enabledMcpjsonServers").is_none());
+    assert!(current.get("disabledMcpjsonServers").is_none());
+    assert!(current.get("enableAllProjectMcpServers").is_none());
+    assert_eq!(current["keep"]["value"], 1);
+    assert_eq!(
+        saved["projects"][&other_project_key],
+        global["projects"][&other_project_key]
+    );
+    assert_eq!(saved["mcpServers"], global["mcpServers"]);
+    assert_eq!(
+        saved["enabledMcpjsonServers"],
+        global["enabledMcpjsonServers"]
+    );
+    assert_eq!(
+        saved["disabledMcpjsonServers"],
+        global["disabledMcpjsonServers"]
+    );
+    assert_eq!(fs::read(fixture.project_file()).unwrap(), project_file);
+    let local_saved = read_json(&local_settings_path);
+    assert!(local_saved.get("enabledMcpjsonServers").is_none());
+    assert!(local_saved.get("disabledMcpjsonServers").is_none());
+    assert!(local_saved.get("enableAllProjectMcpServers").is_none());
+    assert_eq!(local_saved["keep"], true);
+    assert_eq!(fs::read(shared_settings_path).unwrap(), shared_settings);
+
+    let repeated = fixture.run_command(&["mcp", "reset-project-choices"], &[], None, &[]);
+    assert!(repeated.status.success());
+    assert_eq!(repeated.stdout, output.stdout);
+    assert_eq!(repeated.stderr, output.stderr);
+}
+
+#[test]
+fn mcp_reset_project_choices_respects_disabled_write_gate_for_both_files() {
+    let fixture = Fixture::new();
+    let project_key = fixture
+        .repo
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "projects": {
+                (project_key.as_str()): {
+                    "enabledMcpjsonServers": ["approved"],
+                    "disabledMcpjsonServers": ["rejected"]
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let local_path = fixture.cwd.join(".claude/settings.local.json");
+    fs::create_dir_all(local_path.parent().unwrap()).unwrap();
+    fs::write(
+        &local_path,
+        br#"{"enabledMcpjsonServers":["approved"],"disabledMcpjsonServers":["rejected"],"enableAllProjectMcpServers":true}"#,
+    )
+    .unwrap();
+    let global_before = fs::read(fixture.global_file()).unwrap();
+    let local_before = fs::read(&local_path).unwrap();
+
+    let output = fixture.run_command(
+        &["mcp", "reset-project-choices"],
+        &[],
+        None,
+        &[("COMETIX_WRITE_ENABLED", "0")],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("configuration writes are disabled by COMETIX_WRITE_ENABLED=0")
+    );
+    assert_eq!(fs::read(fixture.global_file()).unwrap(), global_before);
+    assert_eq!(fs::read(local_path).unwrap(), local_before);
+}
+
+#[test]
+fn mcp_reset_project_choices_rejects_malformed_local_settings_without_global_mutation() {
+    let fixture = Fixture::new();
+    let project_key = fixture
+        .repo
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "projects": {
+                (project_key.as_str()): {
+                    "enabledMcpjsonServers": ["approved"],
+                    "disabledMcpjsonServers": ["rejected"]
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let local_path = fixture.cwd.join(".claude/settings.local.json");
+    fs::create_dir_all(local_path.parent().unwrap()).unwrap();
+    let malformed_local = b"{broken";
+    fs::write(&local_path, malformed_local).unwrap();
+    let global_before = fs::read(fixture.global_file()).unwrap();
+
+    let output = fixture.run_command(&["mcp", "reset-project-choices"], &[], None, &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Failed to parse"));
+    assert_eq!(fs::read(fixture.global_file()).unwrap(), global_before);
+    assert_eq!(fs::read(local_path).unwrap(), malformed_local);
+}
+
+#[test]
+fn mcp_reset_project_choices_reports_empty_projects_and_rejects_options() {
+    let fixture = Fixture::new();
+    let help = fixture.run_command(&["mcp", "reset-project-choices"], &["--help"], None, &[]);
+    assert!(help.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&help.stdout),
+        "Usage: cometix mcp reset-project-choices [options]\n\nReset all approved and rejected project-scoped (.mcp.json) servers within this\nproject\n\nOptions:\n  -h, --help  Display help for command\n"
+    );
+    assert!(help.stderr.is_empty());
+
+    let empty = fixture.run_command(&["mcp", "reset-project-choices"], &[], None, &[]);
+    assert!(empty.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&empty.stdout),
+        "Project-scoped (.mcp.json) server approvals and rejections stored for this project have been reset.\n"
+    );
+    assert!(empty.stderr.is_empty());
+
+    let unknown = fixture.run_command(&["mcp", "reset-project-choices"], &["--bogus"], None, &[]);
+    assert!(!unknown.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&unknown.stderr).trim(),
+        "error: unknown option '--bogus'"
+    );
+}
