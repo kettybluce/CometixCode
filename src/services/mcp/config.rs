@@ -961,6 +961,187 @@ pub fn does_enterprise_mcp_config_exist_readonly() -> bool {
     super::utils::get_enterprise_mcp_file_path_readonly().is_file()
 }
 
+/// Add a server definition to an editable persisted MCP scope.
+///
+/// The raw config is validated and canonicalized through the same schema path
+/// used by startup before any file is changed. User and local entries live in
+/// `.claude.json`; project entries live in `.mcp.json` in the invocation
+/// directory, preserving fields owned by other tools.
+pub fn add_mcp_server_config(name: &str, server: &Value, scope: ConfigScope) -> anyhow::Result<()> {
+    validate_cli_mcp_server_name(name)?;
+    if !crate::utils::env_utils::is_cometix_write_enabled() {
+        anyhow::bail!("configuration writes are disabled by COMETIX_WRITE_ENABLED=0");
+    }
+
+    if does_enterprise_mcp_config_exist_readonly()
+        || crate::utils::settings::plugin_only_policy::is_restricted_to_plugin_only("mcp")
+    {
+        anyhow::bail!("MCP server configuration is managed by your organization");
+    }
+
+    let canonical_server = validate_and_canonicalize_cli_mcp_server(name, server)?;
+    match scope {
+        ConfigScope::User | ConfigScope::Local => {
+            let project_key = crate::utils::config::normalize_project_path(
+                &crate::utils::config::get_project_path_for_config().to_string_lossy(),
+            );
+            crate::utils::config::update_global_config_value(|config| {
+                let object = config.as_object_mut().ok_or_else(|| {
+                    anyhow::anyhow!("global configuration root must be a JSON object")
+                })?;
+                let servers = match scope {
+                    ConfigScope::User => ensure_json_object(
+                        object
+                            .entry("mcpServers")
+                            .or_insert_with(|| serde_json::json!({})),
+                        "mcpServers",
+                    )?,
+                    ConfigScope::Local => {
+                        let projects = ensure_json_object(
+                            object
+                                .entry("projects")
+                                .or_insert_with(|| serde_json::json!({})),
+                            "projects",
+                        )?;
+                        let project = ensure_json_object(
+                            projects
+                                .entry(project_key.clone())
+                                .or_insert_with(|| serde_json::json!({})),
+                            "project configuration",
+                        )?;
+                        ensure_json_object(
+                            project
+                                .entry("mcpServers")
+                                .or_insert_with(|| serde_json::json!({})),
+                            "project mcpServers",
+                        )?
+                    }
+                    _ => unreachable!(),
+                };
+                validate_existing_mcp_servers(
+                    &Value::Object(servers.clone()),
+                    scope.as_str(),
+                )?;
+                if servers.contains_key(name) {
+                    anyhow::bail!(
+                        "MCP server '{name}' already exists in {scope_name}",
+                        scope_name = scope.as_str()
+                    );
+                }
+                servers.insert(name.to_string(), canonical_server.clone());
+                Ok(())
+            })
+        }
+        ConfigScope::Project => {
+            let path = crate::bootstrap::state::get_original_cwd().join(".mcp.json");
+            update_mcp_json_file(&path, name, canonical_server)
+        }
+        _ => anyhow::bail!(
+            "MCP servers cannot be added to the {} scope",
+            scope.as_str()
+        ),
+    }
+}
+
+fn ensure_json_object<'a>(
+    value: &'a mut Value,
+    field: &str,
+) -> anyhow::Result<&'a mut serde_json::Map<String, Value>> {
+    value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("{field} must be a JSON object"))
+}
+
+fn validate_existing_mcp_servers(servers: &Value, source: &str) -> anyhow::Result<()> {
+    crate::utils::zod::safe_parse(
+        super::types::mcp_json_config_schema(),
+        &serde_json::json!({ "mcpServers": servers }),
+    )
+    .map_err(|error| anyhow::anyhow!("Invalid {source} MCP configuration: {error:?}"))?;
+    Ok(())
+}
+
+fn validate_cli_mcp_server_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        anyhow::bail!(
+            "MCP server name must contain only ASCII letters, numbers, hyphens, or underscores"
+        );
+    }
+    if matches!(name, "workspace" | "claude-in-chrome" | "__proto__") {
+        anyhow::bail!("MCP server name '{name}' is reserved");
+    }
+    Ok(())
+}
+
+fn validate_and_canonicalize_cli_mcp_server(name: &str, server: &Value) -> anyhow::Result<Value> {
+    let mut server = server.clone();
+    if server.get("type").and_then(Value::as_str) == Some("streamable-http") {
+        server["type"] = Value::String("http".to_string());
+    }
+    if server.get("type").and_then(Value::as_str) == Some("sdk") {
+        anyhow::bail!("SDK MCP servers cannot be added with mcp add-json");
+    }
+
+    let wrapped = serde_json::json!({"mcpServers": {(name): server}});
+    let parsed = parse_mcp_config_value_readonly(&wrapped, false, ConfigScope::Dynamic, None);
+    if !parsed.errors.is_empty() {
+        let details = parsed
+            .errors
+            .iter()
+            .map(|error| format!("{}: {}", error.path, error.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        anyhow::bail!("Invalid MCP server configuration: {details}");
+    }
+    let config = parsed
+        .servers
+        .get(name)
+        .ok_or_else(|| anyhow::anyhow!("Invalid MCP server configuration for '{name}'"))?;
+    if !is_mcp_server_allowed_by_policy_readonly(name, Some(config)) {
+        anyhow::bail!("MCP server '{name}' is blocked by your organization or settings policy");
+    }
+    let canonical =
+        crate::utils::zod::safe_parse(super::types::mcp_server_config_schema(), &server)
+            .map_err(|_| anyhow::anyhow!("Invalid MCP server configuration for '{name}'"))?;
+    Ok(canonical)
+}
+
+fn update_mcp_json_file(path: &Path, name: &str, server: Value) -> anyhow::Result<()> {
+    crate::utils::config::with_config_lock(path, || {
+        let mut config = match std::fs::read_to_string(path) {
+            Ok(content) => serde_json::from_str::<Value>(&content)
+                .map_err(|error| anyhow::anyhow!("Failed to parse {}: {error}", path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+            Err(error) => return Err(error.into()),
+        };
+        let root = ensure_json_object(&mut config, ".mcp.json")?;
+        let servers = ensure_json_object(
+            root.entry("mcpServers")
+                .or_insert_with(|| serde_json::json!({})),
+            "mcpServers",
+        )?;
+        validate_existing_mcp_servers(&Value::Object(servers.clone()), "project")?;
+        if servers.contains_key(name) {
+            anyhow::bail!("MCP server '{name}' already exists in project scope");
+        }
+        servers.insert(name.to_string(), server);
+        let json = serde_json::to_vec_pretty(&config)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::utils::file::write_file_sync_and_flush_to_target_with_mode(
+            path,
+            &json,
+            Some(0o600),
+        )?;
+        Ok(())
+    })
+}
+
 /// Shared/eager JS Promise carrier at the source's fetch call sites. This
 /// carries the already-existing claude.ai fetch, without another fetch/cache.
 pub(super) type McpConfigPromise = futures::future::Shared<

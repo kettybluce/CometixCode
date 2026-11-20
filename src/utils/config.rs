@@ -141,7 +141,7 @@ pub fn normalize_project_path(path: &str) -> String {
 }
 
 /// Maps to CC `utils/config.ts#getProjectPathForConfig`.
-fn get_project_path_for_config() -> PathBuf {
+pub(crate) fn get_project_path_for_config() -> PathBuf {
     let original_cwd = crate::bootstrap::state::get_original_cwd();
     let resolved_cwd = original_cwd.canonicalize().unwrap_or(original_cwd);
     crate::utils::git::find_canonical_git_root(&resolved_cwd).unwrap_or(resolved_cwd)
@@ -1511,6 +1511,14 @@ fn acquire_config_lock(path: &Path) -> anyhow::Result<ConfigLockGuard> {
     }
 }
 
+pub(crate) fn with_config_lock<T>(
+    path: &Path,
+    callback: impl FnOnce() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let _lock = acquire_config_lock(path)?;
+    callback()
+}
+
 fn write_config_value(path: &Path, value: &serde_json::Value) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(value)?;
     fs::write(path, json)?;
@@ -1522,6 +1530,65 @@ fn write_config_value(path: &Path, value: &serde_json::Value) -> anyhow::Result<
     }
 
     GLOBAL_CONFIG_WRITE_COUNT.fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Read-modify-write a raw value in `.claude.json` without passing it through
+/// the typed global-config carrier. MCP configuration intentionally retains
+/// fields owned by newer clients, so a typed round-trip would silently discard
+/// them. The updater runs under the same lock/backup/write policy as the
+/// regular global-config writer and refuses malformed existing files.
+pub(crate) fn update_global_config_value(
+    updater: impl FnOnce(&mut serde_json::Value) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if !is_write_enabled() {
+        anyhow::bail!("configuration writes are disabled by COMETIX_WRITE_ENABLED=0");
+    }
+
+    let path = crate::utils::env::get_global_claude_file();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let _lock = acquire_config_lock(&path)?;
+    let original = match fs::read_to_string(&path) {
+        Ok(content) => {
+            let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
+            serde_json::from_str::<serde_json::Value>(content)
+                .map_err(|error| anyhow::anyhow!("Failed to parse {}: {error}", path.display()))?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(error.into()),
+    };
+    if !original.is_object() {
+        anyhow::bail!(
+            "Configuration file {} must contain a JSON object",
+            path.display()
+        );
+    }
+
+    let mut updated = original.clone();
+    updater(&mut updated)?;
+    if updated == original {
+        return Ok(());
+    }
+
+    create_config_backup(&path);
+    let json = serde_json::to_vec_pretty(&updated)?;
+    crate::utils::file::write_file_sync_and_flush_to_target_with_mode(
+        &path,
+        &json,
+        Some(0o600),
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    }
+    GLOBAL_CONFIG_WRITE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if let Ok(config) = load_global_config_from_value(updated) {
+        write_through_global_config_cache(&path, config);
+    }
     Ok(())
 }
 

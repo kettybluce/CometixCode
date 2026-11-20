@@ -147,6 +147,16 @@ pub fn write_file_sync_and_flush_to_target(
     target_path: &std::path::Path,
     bytes: &[u8],
 ) -> std::io::Result<()> {
+    write_file_sync_and_flush_to_target_with_mode(target_path, bytes, None)
+}
+
+/// Atomic target write with an optional mode for a newly created file. An
+/// existing target's permissions are always preserved.
+pub fn write_file_sync_and_flush_to_target_with_mode(
+    target_path: &std::path::Path,
+    bytes: &[u8],
+    new_file_mode: Option<u32>,
+) -> std::io::Result<()> {
     let fs = get_fs_implementation();
     // SECURITY DEVIATION: CC uses a predictable pid/timestamp name and opens
     // it with truncation. A pre-created symlink could redirect that write.
@@ -181,11 +191,23 @@ pub fn write_file_sync_and_flush_to_target(
                 attributes.set_readonly(permissions & 0o200 == 0);
                 std::fs::set_permissions(&temporary_path, attributes)?;
             }
+        } else if let Some(mode) = new_file_mode {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&temporary_path, std::fs::Permissions::from_mode(mode))?;
+            }
+            #[cfg(windows)]
+            let _ = mode;
         }
         fs.rename_sync(&temporary_path, target_path)
     })();
 
     if let Err(error) = atomic_result {
+        if existing_permissions.is_none() && new_file_mode.is_some() {
+            let _ = fs.unlink_sync(&temporary_path);
+            return Err(error);
+        }
         crate::utils::debug::log_for_debugging(&format!(
             "Atomic file write failed, falling back to direct write: {error}"
         ));

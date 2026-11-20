@@ -14,6 +14,7 @@ use crate::utils::settings::constants::SettingSource;
 use crate::utils::settings::get_settings_file_path_for_source;
 use iocraft::prelude::*;
 use serde_json::Value;
+use std::io::{IsTerminal, Read};
 
 #[cfg(test)]
 pub const NO_MCP_SERVERS_CONFIGURED: &str =
@@ -41,6 +42,132 @@ pub fn maybe_run_mcp_xaa_cli(argv: &[String], rt: &tokio::runtime::Runtime) -> O
             1
         }
     })
+}
+
+/// Handle the non-interactive MCP configuration commands that must run before
+/// the retained TUI starts. This mirrors Claude Code's `mcp add-json` command;
+/// the `-` payload is read from stdin so secrets never appear in argv/history.
+pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
+    let mcp_index = argv.iter().position(|arg| arg == "mcp")?;
+    if argv.get(mcp_index + 1).map(String::as_str) != Some("add-json") {
+        return None;
+    }
+
+    let args = &argv[mcp_index + 2..];
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_mcp_add_json_help();
+        return Some(0);
+    }
+
+    Some(match run_mcp_add_json_cli(args) {
+        Ok((name, scope)) => {
+            println!("Added MCP server '{name}' to {scope} scope.");
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    })
+}
+
+const MCP_ADD_JSON_MAX_STDIN_BYTES: usize = 1024 * 1024;
+
+fn print_mcp_add_json_help() {
+    println!(
+        "Usage: cometix mcp add-json [options] <name> <json|->\n\nOptions:\n  -s, --scope <scope>  local (default), user, or project\n      --help           Show this help\n\nUse '-' as the JSON argument to read the server configuration from stdin."
+    );
+}
+
+fn run_mcp_add_json_cli(args: &[String]) -> anyhow::Result<(String, &'static str)> {
+    let mut scope = crate::services::mcp::types::ConfigScope::Local;
+    let mut positional = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "-s" || arg == "--scope" {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| anyhow::anyhow!("missing value for {arg}"))?;
+            scope = parse_mcp_add_json_scope(value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--scope=") {
+            scope = parse_mcp_add_json_scope(value)?;
+            index += 1;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("-s=") {
+            scope = parse_mcp_add_json_scope(value)?;
+            index += 1;
+            continue;
+        }
+        if arg == "--client-secret" || arg.starts_with("--client-secret=") {
+            anyhow::bail!("--client-secret is not supported by this build");
+        }
+        if arg != "-" && arg.starts_with('-') {
+            anyhow::bail!("unknown option '{arg}'");
+        }
+        positional.push(arg.clone());
+        index += 1;
+    }
+
+    if positional.len() != 2 {
+        anyhow::bail!("expected <name> and <json|->");
+    }
+    let name = positional.remove(0);
+    let payload = positional.remove(0);
+    let server = read_mcp_add_json_payload(&payload)?;
+    crate::services::mcp::config::add_mcp_server_config(&name, &server, scope)?;
+    Ok((name, scope.as_str()))
+}
+
+fn parse_mcp_add_json_scope(
+    value: &str,
+) -> anyhow::Result<crate::services::mcp::types::ConfigScope> {
+    match value {
+        "local" => Ok(crate::services::mcp::types::ConfigScope::Local),
+        "user" => Ok(crate::services::mcp::types::ConfigScope::User),
+        "project" => Ok(crate::services::mcp::types::ConfigScope::Project),
+        _ => anyhow::bail!("invalid scope '{value}'; expected local, user, or project"),
+    }
+}
+
+fn read_mcp_add_json_payload(payload: &str) -> anyhow::Result<Value> {
+    let text = if payload == "-" {
+        let stdin = std::io::stdin();
+        if stdin.is_terminal() {
+            anyhow::bail!("There is no JSON on stdin. Pipe it in, or pass it as the argument.");
+        }
+        let mut bytes = Vec::new();
+        stdin
+            .take((MCP_ADD_JSON_MAX_STDIN_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MCP_ADD_JSON_MAX_STDIN_BYTES {
+            anyhow::bail!("The JSON on stdin is over the limit of 1 MiB.");
+        }
+        String::from_utf8(bytes)
+            .map_err(|_| anyhow::anyhow!("The JSON on stdin must be valid UTF-8"))?
+    } else {
+        payload.to_string()
+    };
+
+    if text.trim().is_empty() {
+        anyhow::bail!("There is no JSON on stdin. Pipe it in, or pass it as the argument.");
+    }
+    let value = serde_json::from_str::<Value>(&text).map_err(|_| {
+        anyhow::anyhow!(
+            "Invalid configuration: not a JSON object. Check its quotes, commas and braces."
+        )
+    })?;
+    if !value.is_object() {
+        anyhow::bail!(
+            "Invalid configuration: not a JSON object. Check its quotes, commas and braces."
+        );
+    }
+    Ok(value)
 }
 
 fn cli_error(message: impl Into<String>) -> anyhow::Error {

@@ -45,6 +45,16 @@ pub fn dispatch(config: &CliConfig) -> Option<i32> {
         return Some(1);
     }
 
+    // Non-interactive MCP configuration commands own their stdin/stdout and
+    // must run before the generic subcommand-unimplemented guard below.
+    if config.is_live_mcp_add_json() {
+        let reasons = config.unimplemented_reasons();
+        if !reasons.is_empty() {
+            return Some(exit_unimplemented(&reasons));
+        }
+        return crate::commands::mcp::maybe_run_mcp_cli(&config.argv);
+    }
+
     // Preserve historical ant-only / feature-gated messaging where useful,
     // but unify on `Unimplemented:` for incomplete commander surface.
     let reasons = config.unimplemented_reasons();

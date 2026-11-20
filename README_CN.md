@@ -56,6 +56,16 @@ cargo run --release
 
 可执行文件名为 `cometix`。
 
+### MCP 命令行
+
+从 stdin 安全导入 MCP server JSON，避免 token 出现在 shell 历史和进程参数中：
+
+```sh
+printf '%s' '{"type":"http","url":"https://example.com/mcp"}' | cometix mcp add-json docs -
+```
+
+默认写入当前项目的 local 配置。通过 `--scope user` 写入用户配置，或通过 `--scope project` 写入当前目录的 `.mcp.json`。配置也可以直接作为第二个参数传入；MCP server 名称仅允许 ASCII 字母、数字、连字符和下划线。
+
 ### 交叉编译 Windows 版
 
 需要 mingw-w64 工具链。

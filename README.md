@@ -66,6 +66,16 @@ cargo run --release
 
 The binary is `cometix`.
 
+### MCP CLI
+
+Import an MCP server definition from stdin so tokens do not appear in shell history or process arguments:
+
+```sh
+printf '%s' '{"type":"http","url":"https://example.com/mcp"}' | cometix mcp add-json docs -
+```
+
+The default scope is local to the current project. Use `--scope user` for user-wide configuration or `--scope project` to write `.mcp.json` in the current directory. The JSON may also be passed as the second argument. Server names may contain only ASCII letters, numbers, hyphens, and underscores.
+
 ### Cross-compiling for Windows
 
 ```sh
