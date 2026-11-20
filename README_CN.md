@@ -66,6 +66,14 @@ printf '%s' '{"type":"http","url":"https://example.com/mcp"}' | cometix mcp add-
 
 默认写入当前项目的 local 配置。通过 `--scope user` 写入用户配置，或通过 `--scope project` 写入当前目录的 `.mcp.json`。配置也可以直接作为第二个参数传入；MCP server 名称仅允许 ASCII 字母、数字、连字符和下划线。
 
+使用传输类型命令添加 MCP server：
+
+```sh
+cometix mcp add [options] <name> <commandOrUrl> [args...]
+```
+
+支持 stdio、SSE 和 HTTP 传输、重复的环境变量/headers 选项、local/user/project 范围以及 OAuth client 元数据。
+
 列出已配置的 MCP server 并检查已批准服务器的连接状态：
 
 ```sh

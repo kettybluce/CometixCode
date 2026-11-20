@@ -682,6 +682,13 @@ mod tests {
     }
 
     #[test]
+    fn parse_mcp_add_is_a_live_noninteractive_subcommand() {
+        let c = parse_cli_config(&argv(&["mcp", "add", "demo", "cmd"]));
+        assert_eq!(c.subcommand.as_deref(), Some("mcp"));
+        assert!(c.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
     fn parse_mcp_list_is_a_live_noninteractive_subcommand() {
         let c = parse_cli_config(&argv(&["mcp", "list"]));
         assert_eq!(c.subcommand.as_deref(), Some("mcp"));

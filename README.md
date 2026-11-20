@@ -76,6 +76,14 @@ printf '%s' '{"type":"http","url":"https://example.com/mcp"}' | cometix mcp add-
 
 The default scope is local to the current project. Use `--scope user` for user-wide configuration or `--scope project` to write `.mcp.json` in the current directory. The JSON may also be passed as the second argument. Server names may contain only ASCII letters, numbers, hyphens, and underscores.
 
+Add an MCP server using the transport-aware form:
+
+```sh
+cometix mcp add [options] <name> <commandOrUrl> [args...]
+```
+
+The command supports stdio, SSE, and HTTP transports, repeated environment/header options, local/user/project scopes, and OAuth client metadata.
+
 List configured MCP servers and check approved servers:
 
 ```sh

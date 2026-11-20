@@ -1020,10 +1020,12 @@ pub fn add_mcp_server_config(name: &str, server: &Value, scope: ConfigScope) -> 
                 };
                 validate_existing_mcp_servers(&Value::Object(servers.clone()), scope.as_str())?;
                 if servers.contains_key(name) {
-                    anyhow::bail!(
-                        "MCP server '{name}' already exists in {scope_name}",
-                        scope_name = scope.as_str()
-                    );
+                    let scope_name = match scope {
+                        ConfigScope::Local => "local config",
+                        ConfigScope::User => "user config",
+                        _ => scope.as_str(),
+                    };
+                    anyhow::bail!("MCP server {name} already exists in {scope_name}");
                 }
                 servers.insert(name.to_string(), canonical_server.clone());
                 Ok(())
@@ -1342,7 +1344,7 @@ fn validate_cli_mcp_server_name(name: &str) -> anyhow::Result<()> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     {
         anyhow::bail!(
-            "MCP server name must contain only ASCII letters, numbers, hyphens, or underscores"
+            "Invalid name {name}. Names can only contain letters, numbers, hyphens, and underscores."
         );
     }
     if matches!(name, "workspace" | "claude-in-chrome" | "__proto__") {
@@ -1400,7 +1402,7 @@ fn update_mcp_json_file(path: &Path, name: &str, server: Value) -> anyhow::Resul
         )?;
         validate_existing_mcp_servers(&Value::Object(servers.clone()), "project")?;
         if servers.contains_key(name) {
-            anyhow::bail!("MCP server '{name}' already exists in project scope");
+            anyhow::bail!("MCP server {name} already exists in .mcp.json");
         }
         servers.insert(name.to_string(), server);
         let json = serde_json::to_vec_pretty(&config)?;

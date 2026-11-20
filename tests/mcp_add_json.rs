@@ -203,6 +203,191 @@ fn inline_json_adds_to_user_and_project_scopes() {
 }
 
 #[test]
+fn mcp_add_writes_stdio_server_with_env_and_subprocess_args() {
+    let fixture = Fixture::new();
+    let output = fixture.run_command(
+        &["mcp", "add"],
+        &[
+            "demo",
+            "-e",
+            "API_KEY=secret-value",
+            "--",
+            "node",
+            "server.js",
+            "--flag",
+        ],
+        None,
+        &[],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains(
+        "Added stdio MCP server demo with command: node server.js --flag to local config"
+    ));
+    assert!(stdout.contains("File modified:"));
+    assert!(stderr.is_empty(), "stderr={stderr}");
+    let project_key = fixture
+        .repo
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let saved = read_json(&fixture.global_file());
+    assert_eq!(
+        saved["projects"][&project_key]["mcpServers"]["demo"],
+        json!({
+            "type": "stdio",
+            "command": "node",
+            "args": ["server.js", "--flag"],
+            "env": {"API_KEY": "secret-value"}
+        })
+    );
+    assert!(!stdout.contains("secret-value"));
+    assert!(!stderr.contains("secret-value"));
+}
+
+#[test]
+fn mcp_add_writes_project_http_server_with_headers_and_oauth() {
+    let fixture = Fixture::new();
+    let output = fixture.run_command(
+        &["mcp", "add"],
+        &[
+            "--scope",
+            "project",
+            "--transport",
+            "http",
+            "remote",
+            "https://example.invalid/mcp",
+            "--header",
+            "X-Key: abc",
+            "--header",
+            "Authorization: Bearer secret-value",
+            "--client-id",
+            "client-id",
+            "--callback-port",
+            "4312",
+            "--client-secret",
+        ],
+        None,
+        &[("MCP_CLIENT_SECRET", "secret-value")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains(
+        "Added HTTP MCP server remote with URL: https://example.invalid/mcp to project config"
+    ));
+    assert!(stdout.contains("\"Authorization\": \"[REDACTED]\""));
+    assert!(stdout.contains("\"X-Key\": \"abc\""));
+    assert!(!stdout.contains("secret-value"));
+    assert!(stderr.is_empty(), "stderr={stderr}");
+    assert_eq!(
+        read_json(&fixture.project_file())["mcpServers"]["remote"],
+        json!({
+            "type": "http",
+            "url": "https://example.invalid/mcp",
+            "headers": {
+                "X-Key": "abc",
+                "Authorization": "Bearer secret-value"
+            },
+            "oauth": {"clientId": "client-id", "callbackPort": 4312}
+        })
+    );
+}
+
+#[test]
+fn mcp_add_writes_user_sse_server_and_streamable_http_alias() {
+    let fixture = Fixture::new();
+    let sse = fixture.run_command(
+        &["mcp", "add"],
+        &[
+            "--scope=user",
+            "--transport",
+            "sse",
+            "events",
+            "https://example.invalid/sse",
+        ],
+        None,
+        &[],
+    );
+    assert!(
+        sse.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sse.stderr)
+    );
+    let alias = fixture.run_command(
+        &["mcp", "add"],
+        &[
+            "--scope",
+            "user",
+            "--transport",
+            "streamable-http",
+            "http-events",
+            "https://example.invalid/mcp",
+        ],
+        None,
+        &[],
+    );
+    assert!(
+        alias.status.success(),
+        "{}",
+        String::from_utf8_lossy(&alias.stderr)
+    );
+    let saved = read_json(&fixture.global_file());
+    assert_eq!(
+        saved["mcpServers"]["events"],
+        json!({"type": "sse", "url": "https://example.invalid/sse"})
+    );
+    assert_eq!(
+        saved["mcpServers"]["http-events"],
+        json!({"type": "http", "url": "https://example.invalid/mcp"})
+    );
+}
+
+#[test]
+fn mcp_add_rejects_invalid_arguments_without_creating_configuration() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["--bogus", "demo", "cmd"],
+        vec!["demo", "-e", "NOEQUAL", "--", "cmd"],
+        vec!["--transport", "http", "demo", "url", "--header", "NoColon"],
+        vec!["--transport", "ws", "demo", "url"],
+        vec!["bad-name!", "cmd"],
+    ] {
+        let output = fixture.run_command(&["mcp", "add"], &args, None, &[]);
+        assert!(!output.status.success(), "args={args:?}");
+        assert!(!String::from_utf8_lossy(&output.stderr).trim().is_empty());
+    }
+    assert!(!fixture.global_file().exists());
+    assert!(!fixture.project_file().exists());
+}
+
+#[test]
+fn mcp_add_rejects_duplicate_server_in_the_requested_scope() {
+    let fixture = Fixture::new();
+    let first = fixture.run_command(&["mcp", "add"], &["demo", "cmd"], None, &[]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let second = fixture.run_command(&["mcp", "add"], &["demo", "other"], None, &[]);
+    assert!(!second.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&second.stderr).trim(),
+        "MCP server demo already exists in local config"
+    );
+    assert_eq!(
+        read_json(&fixture.global_file())["projects"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn empty_and_oversized_stdin_are_rejected_without_creating_config() {
     let fixture = Fixture::new();
     assert_exit(fixture.run(&["docs", "-"], Some(b" \n\t"), &[]), false);

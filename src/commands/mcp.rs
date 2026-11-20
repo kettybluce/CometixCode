@@ -54,6 +54,7 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         match subcommand {
             "add-json" => print_mcp_add_json_help(),
+            "add" => print_mcp_add_help(),
             "get" => print_mcp_get_help(),
             "list" => print_mcp_list_help(),
             "remove" => print_mcp_remove_help(),
@@ -64,6 +65,13 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
     }
 
     match subcommand {
+        "add" => Some(match run_mcp_add_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        }),
         "add-json" => Some(match run_mcp_add_json_cli(args) {
             Ok((name, scope)) => {
                 println!("Added MCP server '{name}' to {scope} scope.");
@@ -111,6 +119,42 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
 }
 
 const MCP_ADD_JSON_MAX_STDIN_BYTES: usize = 1024 * 1024;
+
+fn print_mcp_add_help() {
+    println!(
+        r#"Usage: cometix mcp add [options] <name> <commandOrUrl> [args...]
+
+Add an MCP server to Claude Code.
+
+Examples:
+  # Add HTTP server:
+  cometix mcp add --transport http sentry https://mcp.sentry.dev/mcp
+
+  # Add HTTP server with headers:
+  cometix mcp add --transport http corridor https://app.corridor.dev/api/mcp --header "Authorization: Bearer ..."
+
+  # Add stdio server with environment variables:
+  cometix mcp add my-server -e API_KEY=xxx -- node ./my-server.js
+
+  # Add stdio server with subprocess flags:
+  cometix mcp add my-server -- my-command --some-flag arg1
+
+Options:
+  --callback-port <port>       Fixed port for OAuth callback (for servers
+                               requiring pre-registered redirect URIs)
+  --client-id <clientId>       OAuth client ID for HTTP/SSE servers
+  --client-secret              Prompt for OAuth client secret (or set
+                               MCP_CLIENT_SECRET env var)
+  -e, --env <env...>           Set environment variables (e.g. -e KEY=value)
+  -H, --header <header...>     Set headers for HTTP/SSE servers, repeat for more
+                               (e.g. -H "X-Api-Key: abc123")
+  -h, --help                   Display help for command
+  -s, --scope <scope>          Configuration scope (local, user, or project)
+                               (default: "local")
+  -t, --transport <transport>  Transport type (stdio, sse, http). Defaults to
+                               stdio."#
+    );
+}
 
 fn print_mcp_add_json_help() {
     println!(
@@ -686,6 +730,337 @@ fn run_mcp_add_json_cli(args: &[String]) -> anyhow::Result<(String, &'static str
     let server = read_mcp_add_json_payload(&payload)?;
     crate::services::mcp::config::add_mcp_server_config(&name, &server, scope)?;
     Ok((name, scope.as_str()))
+}
+
+fn run_mcp_add_cli(args: &[String]) -> anyhow::Result<()> {
+    let mut scope = crate::services::mcp::types::ConfigScope::Local;
+    let mut transport = "stdio".to_string();
+    let mut env = serde_json::Map::new();
+    let mut headers = serde_json::Map::new();
+    let mut client_id = None;
+    let mut client_secret_requested = false;
+    let mut callback_port = None;
+    let mut positional = Vec::new();
+    let mut after_separator = false;
+    let mut index = 0;
+
+    while index < args.len() {
+        let arg = &args[index];
+        if after_separator {
+            positional.push(arg.clone());
+            index += 1;
+            continue;
+        }
+        if arg == "--" {
+            after_separator = true;
+            index += 1;
+            continue;
+        }
+        if arg == "-s" || arg == "--scope" {
+            let value = args.get(index + 1).ok_or_else(|| {
+                anyhow::anyhow!("error: option '-s, --scope <scope>' argument missing")
+            })?;
+            scope = parse_mcp_add_scope(value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--scope=") {
+            scope = parse_mcp_add_scope(value)?;
+            index += 1;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("-s=") {
+            scope = parse_mcp_add_scope(value)?;
+            index += 1;
+            continue;
+        }
+        if arg == "-t" || arg == "--transport" {
+            let value = args.get(index + 1).ok_or_else(|| {
+                anyhow::anyhow!("error: option '-t, --transport <transport>' argument missing")
+            })?;
+            transport = parse_mcp_add_transport(value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--transport=") {
+            transport = parse_mcp_add_transport(value)?;
+            index += 1;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("-t=") {
+            transport = parse_mcp_add_transport(value)?;
+            index += 1;
+            continue;
+        }
+        if arg == "-e" || arg == "--env" {
+            let start = index + 1;
+            index += 1;
+            while index < args.len() && !args[index].starts_with('-') {
+                let value = &args[index];
+                let (key, value) = value.split_once('=').ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid environment variable format: {value}, environment variables should be added as: -e KEY1=value1 -e KEY2=value2"
+                    )
+                })?;
+                if key.is_empty() {
+                    anyhow::bail!(
+                        "Invalid environment variable format: {value}, environment variables should be added as: -e KEY1=value1 -e KEY2=value2"
+                    );
+                }
+                env.insert(key.to_string(), Value::String(value.to_string()));
+                index += 1;
+            }
+            if index == start {
+                anyhow::bail!("error: option '-e, --env <env...>' argument missing");
+            }
+            continue;
+        }
+        if arg == "-H" || arg == "--header" {
+            let start = index + 1;
+            index += 1;
+            while index < args.len() && !args[index].starts_with('-') {
+                let value = &args[index];
+                let (key, value) = value.split_once(':').ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid header format: \"{value}\". Expected format: \"Header-Name: value\""
+                    )
+                })?;
+                let key = key.trim();
+                if key.is_empty() {
+                    anyhow::bail!("Invalid header: \"{value}\". Header name cannot be empty.");
+                }
+                headers.insert(key.to_string(), Value::String(value.trim().to_string()));
+                index += 1;
+            }
+            if index == start {
+                anyhow::bail!("error: option '-H, --header <header...>' argument missing");
+            }
+            continue;
+        }
+        if arg == "--client-id" {
+            client_id = Some(
+                args.get(index + 1)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("error: option '--client-id <clientId>' argument missing")
+                    })?
+                    .clone(),
+            );
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--client-id=") {
+            client_id = Some(value.to_string());
+            index += 1;
+            continue;
+        }
+        if arg == "--client-secret" {
+            client_secret_requested = true;
+            index += 1;
+            continue;
+        }
+        if arg == "--callback-port" {
+            let value = args.get(index + 1).ok_or_else(|| {
+                anyhow::anyhow!("error: option '--callback-port <port>' argument missing")
+            })?;
+            callback_port = Some(parse_mcp_callback_port(value)?);
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--callback-port=") {
+            callback_port = Some(parse_mcp_callback_port(value)?);
+            index += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            anyhow::bail!("error: unknown option '{arg}'");
+        }
+        positional.push(arg.clone());
+        index += 1;
+    }
+
+    let Some(name) = positional.first() else {
+        anyhow::bail!("error: missing required argument 'name'");
+    };
+    let Some(command_or_url) = positional.get(1) else {
+        anyhow::bail!("error: missing required argument 'commandOrUrl'");
+    };
+    let command_args = positional[2..].to_vec();
+
+    if transport == "stdio"
+        && (client_id.is_some() || client_secret_requested || callback_port.is_some())
+    {
+        eprintln!(
+            "Warning: --client-id, --client-secret, --callback-port, and --xaa only work with HTTP/SSE servers and are ignored for stdio."
+        );
+    }
+
+    let oauth_client_id_was_supplied = client_id.is_some();
+    let mut server = serde_json::Map::new();
+    server.insert("type".to_string(), Value::String(transport.clone()));
+    if transport == "stdio" {
+        server.insert("command".to_string(), Value::String(command_or_url.clone()));
+        server.insert(
+            "args".to_string(),
+            Value::Array(command_args.iter().cloned().map(Value::String).collect()),
+        );
+        server.insert("env".to_string(), Value::Object(env));
+    } else {
+        server.insert("url".to_string(), Value::String(command_or_url.clone()));
+        if !headers.is_empty() {
+            server.insert("headers".to_string(), Value::Object(headers.clone()));
+        }
+        if client_id.is_some() || callback_port.is_some() {
+            let mut oauth = serde_json::Map::new();
+            if let Some(client_id) = client_id.as_ref() {
+                oauth.insert("clientId".to_string(), Value::String(client_id.clone()));
+            }
+            if let Some(callback_port) = callback_port {
+                oauth.insert(
+                    "callbackPort".to_string(),
+                    Value::Number(serde_json::Number::from(callback_port)),
+                );
+            }
+            server.insert("oauth".to_string(), Value::Object(oauth));
+        }
+    }
+
+    let server = Value::Object(server);
+    crate::services::mcp::config::add_mcp_server_config(name, &server, scope)?;
+
+    if client_secret_requested && oauth_client_id_was_supplied && transport != "stdio" {
+        if let Some(secret) = read_mcp_client_secret()? {
+            let global_config = crate::utils::config::load_global_config();
+            let project_config = crate::utils::config::get_current_project_config();
+            if let Some(config) = crate::services::mcp::config::get_mcp_configs_by_scope_readonly(
+                scope,
+                &global_config,
+                &project_config,
+            )
+            .servers
+            .get(name)
+            {
+                let _ = crate::services::mcp::auth::save_mcp_client_secret(name, &config, &secret);
+            }
+        }
+    }
+
+    let transport_label = match transport.as_str() {
+        "stdio" => "stdio",
+        "sse" => "SSE",
+        "http" => "HTTP",
+        _ => unreachable!(),
+    };
+    if transport == "stdio" {
+        println!(
+            "Added {transport_label} MCP server {name} with command: {} {} to {} config",
+            command_or_url,
+            command_args.join(" "),
+            scope.as_str()
+        );
+    } else {
+        println!(
+            "Added {transport_label} MCP server {name} with URL: {command_or_url} to {} config",
+            scope.as_str()
+        );
+        if !headers.is_empty() {
+            let redacted = headers
+                .iter()
+                .map(|(key, value)| {
+                    let value = value.as_str().unwrap_or_default();
+                    let display = if is_sensitive_mcp_add_header(key) {
+                        "[REDACTED]"
+                    } else {
+                        value
+                    };
+                    (key.clone(), Value::String(display.to_string()))
+                })
+                .collect::<serde_json::Map<_, _>>();
+            println!(
+                "Headers: {}",
+                serde_json::to_string_pretty(&Value::Object(redacted))?
+            );
+        }
+    }
+    let path = match scope {
+        crate::services::mcp::types::ConfigScope::Project => {
+            crate::bootstrap::state::get_original_cwd().join(".mcp.json")
+        }
+        crate::services::mcp::types::ConfigScope::Local
+        | crate::services::mcp::types::ConfigScope::User => {
+            crate::utils::env::get_global_claude_file()
+        }
+        _ => unreachable!(),
+    };
+    if scope == crate::services::mcp::types::ConfigScope::Local {
+        let project = crate::utils::config::normalize_project_path(
+            &crate::utils::config::get_project_path_for_config().to_string_lossy(),
+        );
+        println!("File modified: {} [project: {project}]", path.display());
+    } else {
+        println!("File modified: {}", path.display());
+    }
+    Ok(())
+}
+
+fn parse_mcp_add_scope(value: &str) -> anyhow::Result<crate::services::mcp::types::ConfigScope> {
+    match value {
+        "local" => Ok(crate::services::mcp::types::ConfigScope::Local),
+        "user" => Ok(crate::services::mcp::types::ConfigScope::User),
+        "project" => Ok(crate::services::mcp::types::ConfigScope::Project),
+        "dynamic" | "enterprise" | "claudeai" | "managed" | "agent" => {
+            anyhow::bail!("Cannot add MCP server to scope: {value}")
+        }
+        _ => anyhow::bail!(
+            "Invalid scope: {value}. Must be one of: local, user, project, dynamic, enterprise, claudeai, managed, agent"
+        ),
+    }
+}
+
+fn parse_mcp_add_transport(value: &str) -> anyhow::Result<String> {
+    match value {
+        "stdio" | "sse" | "http" => Ok(value.to_string()),
+        "streamable-http" => Ok("http".to_string()),
+        _ => anyhow::bail!(
+            "Invalid transport type: {value}. Must be one of: stdio, sse, http (or streamable-http)"
+        ),
+    }
+}
+
+fn parse_mcp_callback_port(value: &str) -> anyhow::Result<u16> {
+    let port = value.parse::<u16>().ok();
+    if let Some(port) = port.filter(|port| *port > 0) {
+        Ok(port)
+    } else {
+        anyhow::bail!("Error: --callback-port must be a whole number from 1 to 65535")
+    }
+}
+
+fn read_mcp_client_secret() -> anyhow::Result<Option<String>> {
+    if let Some(secret) = std::env::var("MCP_CLIENT_SECRET")
+        .ok()
+        .filter(|secret| !secret.trim().is_empty())
+    {
+        return Ok(Some(secret));
+    }
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        return Ok(None);
+    }
+    print!("Enter OAuth client secret: ");
+    std::io::Write::flush(&mut std::io::stdout())?;
+    let mut secret = String::new();
+    stdin.read_line(&mut secret)?;
+    let secret = secret.trim_end_matches(['\r', '\n']).to_string();
+    Ok((!secret.trim().is_empty()).then_some(secret))
+}
+
+fn is_sensitive_mcp_add_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.contains("authorization")
+        || name.contains("api-key")
+        || name.contains("token")
+        || name.contains("secret")
+        || name.contains("password")
 }
 
 fn parse_mcp_add_json_scope(
