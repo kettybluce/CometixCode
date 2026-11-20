@@ -107,7 +107,7 @@
 
 | 命令组 | 必须实现的子命令 | 当前状态 |
 |---|---|---|
-| `mcp` | `add`, `add-from-claude-desktop`, `add-json`, `get`, `list`, `login`, `logout`, `remove`, `reset-project-choices`, `serve` | `list`、`add-json` 已实现并有真实二进制集成测试；其余缺失 |
+| `mcp` | `add`, `add-from-claude-desktop`, `add-json`, `get`, `list`, `login`, `logout`, `remove`, `reset-project-choices`, `serve` | `get` 已覆盖 user/local/project/enterprise 核心来源并有真实测试；plugin/managed/claude.ai 来源待复核。`list`、`add-json` 有真实二进制测试；其余缺失 |
 | `plugin`/`plugins` | `configure`, `details`, `disable`, `enable`, `eval`, `init/new`, `install/i`, `list`, `marketplace`, `prune/autoremove`, `restore-set-aside`, `tag`, `test`, `uninstall/remove`, `update`, `validate` | 交互 UI/loader 存在，顶层 CLI 全部缺失 |
 | `auth` | `login`, `logout`, `status` | 交互命令存在，顶层 CLI 缺失 |
 | `agents` | `--json`, `--all`, `--cwd`、派发默认参数 | agent/task 数据结构有，agent view/JSON shell 入口缺失 |
@@ -169,9 +169,9 @@ stdio、SSE、streamable HTTP、WebSocket、OAuth、elicitation、MCP resources/
 
 ### 4.2 缺失
 
-- 顶层 `mcp add/get/list/login/logout/remove/reset-project-choices/serve`。
+- 顶层 `mcp add/login/logout/remove/reset-project-choices/serve` 等管理命令仍缺失；`get`、`list`、`add-json` 已接入并有真实二进制测试。`get` 当前对 plugin/managed/claude.ai/dynamic 来源仍需按官方 scope 再核，不能据核心来源测试宣称完全对齐。
 - MCP resources 转 skill/command 的 producer（当前 feature flag 读取不到真实 MCP skills）。
-- MCP server health/status 的 shell 输出契约。
+- MCP server 的登录退出和配置管理命令仍未覆盖；`get`/`list` 的 shell 输出已有独立真实二进制测试，传输类型与企业设置边界仍需继续对照。
 - `add-from-claude-desktop` 的 Mac/WSL 导入。
 - connector/HTTP/SSE 登录和 logout 的完整 CLI OAuth flow。
 - MCP server `serve` 的 stdin/stdout server mode。

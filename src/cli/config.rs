@@ -266,7 +266,7 @@ impl CliConfig {
     }
 
     pub(crate) fn is_live_mcp_command(&self) -> bool {
-        matches!(self.mcp_subcommand(), Some("add-json" | "list"))
+        matches!(self.mcp_subcommand(), Some("add-json" | "get" | "list"))
     }
 
     fn mcp_subcommand(&self) -> Option<&str> {
@@ -313,6 +313,7 @@ Live:
       --agent <name>         Main-thread agent type (--agent / settings.agent)
       --plugin-dir <path>    Inline plugin directory (repeatable)
       --chrome / --no-chrome Claude in Chrome onboarding
+      mcp get <name>               Show MCP server details and health
       mcp list                     List configured MCP servers and health
       mcp add-json <name> <json|->  Add an MCP server; '-' reads JSON from stdin
   -p, --print                Headless/print path
@@ -323,7 +324,7 @@ Live:
 
 Unimplemented (parsed, then exit 1):
       --session-id / --fork-session
-      Subcommands: mcp (except list/add-json), auth, plugin, doctor, update, …
+      Subcommands: mcp (except get/list/add-json), auth, plugin, doctor, update, …
       --init / --init-only / --maintenance
       --worktree / --tmux / --remote / --bg / daemon
 "

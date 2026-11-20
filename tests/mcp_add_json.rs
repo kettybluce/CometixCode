@@ -419,3 +419,201 @@ fn mcp_list_does_not_print_failed_http_url_with_credentials() {
     assert!(!stderr.contains(secret));
     assert!(!stderr.contains(&url));
 }
+
+#[test]
+fn mcp_get_reports_stdio_details_and_health() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "probe": {
+                    "command": "/bin/false",
+                    "args": ["sentinel-arg"],
+                    "env": {"SENTINEL": "sentinel-value"},
+                    "timeout": 500
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(&["mcp", "get", "probe"], &[], None, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("probe:"), "stdout={stdout}");
+    assert!(
+        stdout.contains("Scope: User config (available in all your projects)"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("Status: ✘ Failed to connect"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line.starts_with("  Issue: ")),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("Type: stdio"), "stdout={stdout}");
+    assert!(stdout.contains("Command: /bin/false"), "stdout={stdout}");
+    assert!(stdout.contains("Args: sentinel-arg"), "stdout={stdout}");
+    assert!(
+        stdout.contains("SENTINEL=sentinel-value"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("Timeout: 500ms (ignored: below 1000ms minimum)"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("To remove this server, run: claude mcp remove probe -s user"),
+        "stdout={stdout}"
+    );
+    assert!(stderr.is_empty(), "stderr={stderr}");
+}
+
+#[test]
+fn mcp_get_reports_normal_timeout() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "probe": {
+                    "command": "/bin/false",
+                    "timeout": 1500
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(&["mcp", "get", "probe"], &[], None, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("Timeout: 1500ms"), "stdout={stdout}");
+    assert!(!stdout.contains("below 1000ms minimum"), "stdout={stdout}");
+    assert!(stderr.is_empty(), "stderr={stderr}");
+}
+
+#[test]
+fn mcp_get_reports_pending_project_server_without_connecting() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.project_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "project-probe": {"command": "/bin/false"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(&["mcp", "get", "project-probe"], &[], None, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        stdout.contains("Scope: Project config (shared via .mcp.json)"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("Status: ⏸ Pending approval (run `claude` to approve)"),
+        "stdout={stdout}"
+    );
+    assert!(!stdout.contains("Failed to connect"), "stdout={stdout}");
+    assert!(stderr.is_empty(), "stderr={stderr}");
+}
+
+#[test]
+fn mcp_get_redacts_failed_remote_issue_but_keeps_details() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break Some(stream),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("HTTP fixture accept failed: {error}"),
+            }
+        };
+
+        if let Some(stream) = stream.as_mut() {
+            stream
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        }
+        stream.is_some()
+    });
+
+    let fixture = Fixture::new();
+    let secret = "mcp-get-query-token-sentinel";
+    let header_secret = "mcp-get-header-token-sentinel";
+    let url = format!("http://{address}/mcp?access_token={secret}");
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "remote": {
+                    "type": "http",
+                    "url": url,
+                    "headers": {"Authorization": format!("Bearer {header_secret}")}
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(&["mcp", "get", "remote"], &[], None, &[]);
+    assert!(
+        server.join().unwrap(),
+        "MCP client did not reach the HTTP fixture"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        stdout.contains("Status: ✘ Failed to connect"),
+        "stdout={stdout}"
+    );
+    let issue = stdout
+        .lines()
+        .find(|line| line.starts_with("  Issue: "))
+        .expect("failed remote server should report an Issue");
+    assert!(!issue.contains(secret), "issue leaked query token: {issue}");
+    assert!(!issue.contains(&url), "issue leaked full URL: {issue}");
+    assert!(stdout.contains(&format!("URL: {url}")), "stdout={stdout}");
+    assert!(
+        stdout.contains(&format!("Authorization: Bearer {header_secret}")),
+        "stdout={stdout}"
+    );
+    assert!(stderr.is_empty(), "stderr={stderr}");
+}
+
+#[test]
+fn mcp_get_reports_missing_server() {
+    let fixture = Fixture::new();
+    let output = fixture.run_command(&["mcp", "get", "missing"], &[], None, &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("No MCP server named \"missing\". Run \"claude mcp add\" to add one."),
+        "stderr={stderr}"
+    );
+}

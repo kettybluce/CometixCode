@@ -54,6 +54,7 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         match subcommand {
             "add-json" => print_mcp_add_json_help(),
+            "get" => print_mcp_get_help(),
             "list" => print_mcp_list_help(),
             _ => return None,
         }
@@ -68,6 +69,17 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             }
             Err(error) => {
                 eprintln!("Error: {error}");
+                1
+            }
+        }),
+        "get" => Some(match run_mcp_get_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                if error.to_string().starts_with("No MCP server named ") {
+                    eprintln!("{error}");
+                } else {
+                    eprintln!("Error: {error}");
+                }
                 1
             }
         }),
@@ -87,6 +99,12 @@ const MCP_ADD_JSON_MAX_STDIN_BYTES: usize = 1024 * 1024;
 fn print_mcp_add_json_help() {
     println!(
         "Usage: cometix mcp add-json [options] <name> <json|->\n\nOptions:\n  -s, --scope <scope>  local (default), user, or project\n      --help           Show this help\n\nUse '-' as the JSON argument to read the server configuration from stdin."
+    );
+}
+
+fn print_mcp_get_help() {
+    println!(
+        "Usage: cometix mcp get [options] <name>\n\nGet details about an MCP server. Unapproved .mcp.json servers are shown as pending approval and are not connected to; approved servers are health-checked unless disabled for this project.\n\nOptions:\n  -h, --help  Display help for command"
     );
 }
 
@@ -113,6 +131,16 @@ impl McpListState {
             Self::Pending => "pending",
             Self::PendingApproval => "pending approval",
             Self::Disabled => "disabled",
+        }
+    }
+
+    fn as_get_status(self) -> &'static str {
+        match self {
+            Self::Connected => "✔ Connected",
+            Self::Failed => "✘ Failed to connect",
+            Self::NeedsAuth => "! Needs authentication",
+            Self::PendingApproval => "⏸ Pending approval (run `claude` to approve)",
+            Self::Pending | Self::Disabled => "- Not configured",
         }
     }
 }
@@ -217,6 +245,263 @@ fn mcp_list_rows(runtime: &tokio::runtime::Runtime) -> anyhow::Result<Vec<McpLis
     }
 
     Ok(rows)
+}
+
+fn mcp_scope_label(scope: crate::services::mcp::types::ConfigScope) -> &'static str {
+    use crate::services::mcp::types::ConfigScope;
+
+    match scope {
+        ConfigScope::Local => "Local config (private to you in this project)",
+        ConfigScope::Project => "Project config (shared via .mcp.json)",
+        ConfigScope::User => "User config (available in all your projects)",
+        ConfigScope::Dynamic => "Dynamic config (from command line)",
+        ConfigScope::Enterprise => "Enterprise config (managed by your organization)",
+        ConfigScope::Managed => "Managed settings (provided by your organization)",
+        ConfigScope::ClaudeAi => "claude.ai config",
+    }
+}
+
+fn redact_mcp_issue(
+    error: &str,
+    config: &crate::services::mcp::types::ScopedMcpServerConfig,
+) -> String {
+    let error = config.url.as_deref().map_or_else(
+        || error.to_string(),
+        |url| error.replace(url, "<redacted URL>"),
+    );
+    static URL_PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)https?://[^\s\])\}"'<>]+"#).expect("valid URL matcher")
+    });
+    static AUTH_PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)\b(authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|token|secret|password)\s*[:=]\s*[^\s,;)]+"#)
+            .expect("valid auth matcher")
+    });
+    let redacted = URL_PATTERN.replace_all(&error, |capture: &regex::Captures<'_>| {
+        let raw = &capture[0];
+        let Ok(mut url) = url::Url::parse(raw) else {
+            return "<redacted URL>".to_string();
+        };
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        let has_path = url.path() != "/";
+        url.set_path(if has_path { "/[redacted]" } else { "/" });
+        if let Some(query) = url.query().map(str::to_owned) {
+            let redacted_query = query
+                .split('&')
+                .map(|part| match part.split_once('=') {
+                    Some((key, _)) => format!("{key}=REDACTED"),
+                    None => format!("{part}=REDACTED"),
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            url.set_query(Some(&redacted_query));
+        }
+        url.set_fragment(None);
+        url.to_string()
+    });
+    let bearer_pattern =
+        regex::Regex::new(r"(?i)\bBearer\s+[^\s,;)]+").expect("valid bearer matcher");
+    let mut redacted = bearer_pattern
+        .replace_all(&redacted, "Bearer REDACTED")
+        .into_owned();
+    redacted = AUTH_PATTERN
+        .replace_all(&redacted, "$1=REDACTED")
+        .into_owned();
+    for value in config
+        .headers
+        .values()
+        .chain(config.env.values())
+        .chain(config.auth_token.iter())
+    {
+        if !value.is_empty() {
+            redacted = redacted.replace(value, "REDACTED");
+        }
+    }
+    redacted
+}
+
+fn mcp_scope_removal_path(scope: crate::services::mcp::types::ConfigScope) -> Option<String> {
+    use crate::services::mcp::types::ConfigScope;
+
+    match scope {
+        ConfigScope::Enterprise => Some(
+            crate::services::mcp::utils::describe_mcp_config_file_path(scope),
+        ),
+        ConfigScope::Local | ConfigScope::Project | ConfigScope::User => None,
+        ConfigScope::Dynamic | ConfigScope::Managed | ConfigScope::ClaudeAi => None,
+    }
+}
+
+fn mcp_get_preflight_state(
+    name: &str,
+    config: &crate::services::mcp::types::ScopedMcpServerConfig,
+    project_config: &crate::utils::config::ProjectConfig,
+) -> Option<McpListState> {
+    if config.scope == crate::services::mcp::types::ConfigScope::Project {
+        return project_mcp_list_state(name);
+    }
+    crate::services::mcp::config::is_mcp_server_disabled_in_project_config(name, project_config)
+        .then_some(McpListState::Disabled)
+}
+
+fn mcp_get_connection(
+    runtime: &tokio::runtime::Runtime,
+    name: &str,
+    config: &crate::services::mcp::types::ScopedMcpServerConfig,
+    project_config: &crate::utils::config::ProjectConfig,
+) -> (McpListState, Option<String>) {
+    if let Some(state) = mcp_get_preflight_state(name, config, project_config) {
+        return (state, None);
+    }
+
+    let connection = runtime.block_on(crate::services::mcp::client::connect_to_server(
+        name, config,
+    ));
+    let (state, issue) = match &connection {
+        crate::services::mcp::types::McpServerConnection::Connected(_) => {
+            (McpListState::Connected, None)
+        }
+        crate::services::mcp::types::McpServerConnection::Failed(failed) => (
+            McpListState::Failed,
+            failed
+                .error
+                .as_deref()
+                .map(|error| redact_mcp_issue(error, config)),
+        ),
+        crate::services::mcp::types::McpServerConnection::NeedsAuth(_) => {
+            (McpListState::NeedsAuth, None)
+        }
+        crate::services::mcp::types::McpServerConnection::Pending(_) => {
+            (McpListState::Pending, None)
+        }
+        crate::services::mcp::types::McpServerConnection::Disabled(_) => {
+            (McpListState::Disabled, None)
+        }
+    };
+    if let crate::services::mcp::types::McpServerConnection::Connected(connected) = &connection {
+        crate::services::mcp::client::cleanup_connection(&connected.client);
+    }
+    (state, issue)
+}
+
+fn print_mcp_get_details(
+    name: &str,
+    config: &crate::services::mcp::types::ScopedMcpServerConfig,
+    state: McpListState,
+    issue: Option<&str>,
+) {
+    use crate::services::mcp::types::Transport;
+
+    println!("{name}:");
+    println!("  Scope: {}", mcp_scope_label(config.scope));
+    println!("  Status: {}", state.as_get_status());
+    if let Some(issue) = issue {
+        println!("  Issue: {issue}");
+    }
+
+    if config.transport == Transport::Stdio {
+        println!("  Type: stdio");
+        println!("  Command: {}", config.command.as_deref().unwrap_or(""));
+        println!("  Args: {}", config.args.join(" "));
+        if !config.env.is_empty() {
+            println!("  Environment:");
+            for (key, value) in &config.env {
+                println!("    {key}={value}");
+            }
+        }
+    } else {
+        println!("  Type: {}", config.transport.as_str());
+        if let Some(url) = &config.url {
+            println!("  URL: {url}");
+        }
+        if !config.headers.is_empty() {
+            println!("  Headers:");
+            for (key, value) in &config.headers {
+                println!("    {key}: {value}");
+            }
+        }
+        if let Some(oauth) = config.oauth.as_ref().and_then(serde_json::Value::as_object) {
+            let mut oauth_details = Vec::new();
+            if oauth.get("clientId").is_some() {
+                oauth_details.push("client_id configured".to_string());
+                if crate::services::mcp::auth::get_mcp_client_config(name, config)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    oauth_details.push("client_secret configured".to_string());
+                }
+            }
+            if let Some(callback_port) = oauth.get("callbackPort") {
+                oauth_details.push(format!("callback_port {callback_port}"));
+            }
+            if !oauth_details.is_empty() {
+                println!("  OAuth: {}", oauth_details.join(", "));
+            }
+        }
+    }
+    if let Some(timeout_ms) =
+        crate::services::mcp::config::get_mcp_server_timeout_by_name_readonly(name)
+    {
+        let below_minimum = if timeout_ms < 1000 {
+            " (ignored: below 1000ms minimum)"
+        } else {
+            ""
+        };
+        println!("  Timeout: {timeout_ms}ms{below_minimum}");
+    }
+
+    match config.scope {
+        crate::services::mcp::types::ConfigScope::Local
+        | crate::services::mcp::types::ConfigScope::Project
+        | crate::services::mcp::types::ConfigScope::User => {
+            println!();
+            println!(
+                "To remove this server, run: claude mcp remove {name} -s {}",
+                config.scope.as_str()
+            );
+        }
+        crate::services::mcp::types::ConfigScope::Enterprise => {
+            if let Some(path) = mcp_scope_removal_path(config.scope) {
+                println!();
+                println!("To remove this server, edit {path}");
+            }
+        }
+        crate::services::mcp::types::ConfigScope::Managed => {
+            println!();
+            println!(
+                "This server is provided by your organization's managed settings and cannot be removed locally."
+            );
+        }
+        crate::services::mcp::types::ConfigScope::Dynamic
+        | crate::services::mcp::types::ConfigScope::ClaudeAi => {}
+    }
+}
+
+fn run_mcp_get_cli(args: &[String]) -> anyhow::Result<()> {
+    let [name] = args else {
+        if args.is_empty() {
+            anyhow::bail!("missing required argument 'name'; usage: cometix mcp get <name>");
+        }
+        anyhow::bail!(
+            "unexpected argument '{}'; usage: cometix mcp get <name>",
+            args[1]
+        );
+    };
+
+    let config =
+        crate::services::mcp::config::get_mcp_config_by_name_readonly(name).ok_or_else(|| {
+            anyhow::anyhow!("No MCP server named \"{name}\". Run \"claude mcp add\" to add one.")
+        })?;
+    let project_config = crate::utils::config::get_current_project_config();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .build()?;
+    crate::utils::process_runtime::set_process_runtime_handle(runtime.handle().clone());
+    let (state, issue) = mcp_get_connection(&runtime, name, &config, &project_config);
+    print_mcp_get_details(name, &config, state, issue.as_deref());
+    Ok(())
 }
 
 fn run_mcp_list_cli(args: &[String]) -> anyhow::Result<()> {
@@ -877,6 +1162,59 @@ mod tests {
         let _config_guard = EnvVarGuard::set("CLAUDE_CONFIG_DIR", &dir);
         test(&dir);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mcp_get_issue_redaction_removes_normalized_url_credentials_and_auth_values() {
+        let url_password = "url-password";
+        let mut config =
+            crate::services::mcp::types::ScopedMcpServerConfig::stdio_for_test("redact");
+        config.url = Some(format!(
+            "http://url-user:{url_password}@example.invalid/private-path?access_token=url-secret"
+        ));
+        config
+            .headers
+            .insert("Authorization".into(), "Bearer static-secret".into());
+        config.env.insert("TOKEN".into(), "env-secret".into());
+        config.auth_token = Some("auth-secret".into());
+        let error = format!(
+            "dial http://url-user:{url_password}@example.invalid/private-path?access_token=url-secret Authorization: Bearer dynamic-secret TOKEN=env-secret auth-secret"
+        );
+
+        let redacted = redact_mcp_issue(&error, &config);
+        for secret in [
+            "url-user",
+            url_password,
+            "private-path",
+            "url-secret",
+            "static-secret",
+            "dynamic-secret",
+            "env-secret",
+            "auth-secret",
+        ] {
+            assert!(!redacted.contains(secret), "{secret} leaked in {redacted}");
+        }
+        assert!(redacted.contains("<redacted URL>"), "{redacted}");
+        assert!(redacted.contains("Authorization=REDACTED"), "{redacted}");
+    }
+
+    #[test]
+    fn mcp_get_issue_redaction_covers_url_normalization() {
+        let url_password = "url-password";
+        let mut config =
+            crate::services::mcp::types::ScopedMcpServerConfig::stdio_for_test("redact");
+        config.url = Some(format!(
+            "http://User:{url_password}@EXAMPLE.invalid/private-path?access_token=url-secret"
+        ));
+        let error = format!(
+            "dial http://user:{url_password}@example.invalid/private-path?access_token=url-secret"
+        );
+
+        let redacted = redact_mcp_issue(&error, &config);
+        assert!(!redacted.contains(url_password), "{redacted}");
+        assert!(!redacted.contains("url-secret"), "{redacted}");
+        assert!(!redacted.contains("private-path"), "{redacted}");
+        assert!(redacted.contains("access_token=REDACTED"), "{redacted}");
     }
 
     fn canvas_text(canvas: &Canvas) -> String {

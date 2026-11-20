@@ -1402,6 +1402,49 @@ pub fn get_mcp_config_by_name_readonly(name: &str) -> Option<ScopedMcpServerConf
         .cloned()
 }
 
+fn timeout_from_mcp_source(source: &Value, name: &str) -> Option<u64> {
+    let servers = source.get("mcpServers").unwrap_or(source);
+    servers.as_object()?.get(name)?.get("timeout")?.as_u64()
+}
+
+fn timeout_from_mcp_file(path: &Path, name: &str) -> Option<u64> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value = serde_json::from_str::<Value>(&raw).ok()?;
+    timeout_from_mcp_source(&value, name)
+}
+
+/// Maps to the timeout field shown by CC `mcp get` without widening the
+/// runtime connection config. MCP config values are intentionally retained as
+/// raw JSON in global/project settings, so this preserves the optional field
+/// without changing every `ScopedMcpServerConfig` constructor.
+pub fn get_mcp_server_timeout_by_name_readonly(name: &str) -> Option<u64> {
+    let global_config = crate::utils::config::load_global_config();
+    let project_config = crate::utils::config::get_current_project_config();
+
+    if let Some(timeout) =
+        timeout_from_mcp_file(&super::utils::get_enterprise_mcp_file_path_readonly(), name)
+    {
+        return Some(timeout);
+    }
+    if crate::utils::settings::plugin_only_policy::is_restricted_to_plugin_only("mcp") {
+        return None;
+    }
+    if let Some(source) = project_config.mcp_servers.as_ref()
+        && let Some(timeout) = timeout_from_mcp_source(source, name)
+    {
+        return Some(timeout);
+    }
+    for directory in current_project_mcp_dirs().into_iter().rev() {
+        if let Some(timeout) = timeout_from_mcp_file(&directory.join(".mcp.json"), name) {
+            return Some(timeout);
+        }
+    }
+    global_config
+        .mcp_servers
+        .as_ref()
+        .and_then(|source| timeout_from_mcp_source(source, name))
+}
+
 /// Maps to: CC `services/mcp/config.ts#isDefaultDisabledBuiltin`.
 ///
 /// The only official default-disabled built-in is behind a bundled feature that

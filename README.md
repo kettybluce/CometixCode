@@ -84,6 +84,15 @@ cometix mcp list
 
 The list reports the configuration scope and a redacted health state. Pending project servers are shown as pending approval; credentials, URLs, commands, and headers are not printed.
 
+Show one configured MCP server, its scope, health, and transport details:
+
+```sh
+cometix mcp get <name>
+```
+
+Pending `.mcp.json` servers are reported as pending approval without a connection attempt. Approved servers are health-checked unless disabled for the current project.
+Transport details follow Claude Code's output, including configured URLs, headers, and environment values.
+
 ### Cross-compiling for Windows
 
 ```sh

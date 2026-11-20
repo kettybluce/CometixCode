@@ -74,6 +74,15 @@ cometix mcp list
 
 列表会显示配置范围和脱敏后的连接状态。待批准的项目服务器会标记为待批准；不会打印凭据、URL、启动命令或 headers。
 
+查看单个 MCP server 的配置范围、健康状态和传输详情：
+
+```sh
+cometix mcp get <name>
+```
+
+未批准的 `.mcp.json` server 会显示为待批准且不会发起连接；已批准的 server 会检查健康状态，除非它在当前项目中被禁用。
+传输详情与 Claude Code 的输出一致，会显示已配置的 URL、headers 和环境变量值。
+
 ### 交叉编译 Windows 版
 
 需要 mingw-w64 工具链。
