@@ -75,6 +75,71 @@ impl SecureStorageBackend for MacOsKeychainStorage {
 
     /// Maps to: CC `utils/secureStorage/macOsKeychainStorage.ts:97-157` `update`.
     fn update(&self, data: &SecureStorageData) -> anyhow::Result<SecureStorageUpdate> {
+        self.update_with_gate(
+            data,
+            crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED,
+        )
+    }
+
+    fn update_mcp_oauth_credentials(
+        &self,
+        data: &SecureStorageData,
+    ) -> anyhow::Result<SecureStorageUpdate> {
+        self.update_with_gate(
+            data,
+            crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED,
+        )
+    }
+
+    fn delete(&self) -> anyhow::Result<bool> {
+        self.delete_with_gate(crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED)
+    }
+
+    fn delete_mcp_oauth_credentials(&self) -> anyhow::Result<bool> {
+        self.delete_with_gate(crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED)
+    }
+}
+
+impl MacOsKeychainStorage {
+    fn delete_with_gate(&self, side_effects_enabled: bool) -> anyhow::Result<bool> {
+        let username = get_username();
+        let service_name = get_mac_os_keychain_storage_service_name(CREDENTIALS_SERVICE_SUFFIX)?;
+        if !side_effects_enabled {
+            return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
+        }
+        super::mac_os_keychain_helpers::clear_keychain_cache();
+
+        #[cfg(all(target_os = "macos", not(test)))]
+        let deleted = {
+            let mut security = std::process::Command::new("security");
+            crate::utils::subprocess_env::apply_process_env_std(&mut security);
+            security
+                .args([
+                    "delete-generic-password",
+                    "-a",
+                    &username,
+                    "-s",
+                    &service_name,
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        };
+        #[cfg(any(not(target_os = "macos"), test))]
+        let deleted = false;
+
+        Ok(deleted)
+    }
+}
+
+impl MacOsKeychainStorage {
+    fn update_with_gate(
+        &self,
+        data: &SecureStorageData,
+        side_effects_enabled: bool,
+    ) -> anyhow::Result<SecureStorageUpdate> {
         const SECURITY_STDIN_LINE_LIMIT: usize = 4096 - 64;
         let json_string = match serde_json::to_string(data) {
             Ok(value) => value,
@@ -96,7 +161,7 @@ impl SecureStorageBackend for MacOsKeychainStorage {
         // Deviation (L2, user-authorized OAuth safety gate): all source
         // serialization and key selection above remain live; reject immediately
         // before cache invalidation or the `security` process outlet.
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !side_effects_enabled {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         super::mac_os_keychain_helpers::clear_keychain_cache();
@@ -163,40 +228,6 @@ impl SecureStorageBackend for MacOsKeychainStorage {
             success: updated,
             warning: None,
         })
-    }
-
-    /// Maps to: CC `utils/secureStorage/macOsKeychainStorage.ts:159-177` `delete`.
-    fn delete(&self) -> anyhow::Result<bool> {
-        let username = get_username();
-        let service_name = get_mac_os_keychain_storage_service_name(CREDENTIALS_SERVICE_SUFFIX)?;
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
-            return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
-        }
-        super::mac_os_keychain_helpers::clear_keychain_cache();
-
-        #[cfg(all(target_os = "macos", not(test)))]
-        let deleted = {
-            let mut security = std::process::Command::new("security");
-            // CC `execSyncWithDefaults_DEPRECATED` passes `env: process.env`; the carrier is its counterpart.
-            crate::utils::subprocess_env::apply_process_env_std(&mut security);
-            security
-                .args([
-                    "delete-generic-password",
-                    "-a",
-                    &username,
-                    "-s",
-                    &service_name,
-                ])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false)
-        };
-        #[cfg(any(not(target_os = "macos"), test))]
-        let deleted = false;
-
-        Ok(deleted)
     }
 }
 

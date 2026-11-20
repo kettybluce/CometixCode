@@ -24,7 +24,12 @@ pub(crate) trait SecureStorageBackend: Send + Sync {
     fn name(&self) -> &str;
     fn read(&self) -> Option<SecureStorageData>;
     fn update(&self, data: &SecureStorageData) -> anyhow::Result<SecureStorageUpdate>;
+    fn update_mcp_oauth_credentials(
+        &self,
+        data: &SecureStorageData,
+    ) -> anyhow::Result<SecureStorageUpdate>;
     fn delete(&self) -> anyhow::Result<bool>;
+    fn delete_mcp_oauth_credentials(&self) -> anyhow::Result<bool>;
 }
 
 /// Maps to: CC `utils/secureStorage/index.ts:9-19` `getSecureStorage`.

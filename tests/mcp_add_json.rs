@@ -1,9 +1,10 @@
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Write;
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const FAKE_TOKEN: &str = "cometix-stdin-test-token";
@@ -52,17 +53,7 @@ impl Fixture {
         stdin: Option<&[u8]>,
         env: &[(&str, &str)],
     ) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_cometix"));
-        command
-            .args(command_args)
-            .args(args)
-            .current_dir(&self.cwd)
-            .env_clear()
-            .env("HOME", &self.home)
-            .env("USERPROFILE", &self.home)
-            .env("CLAUDE_CONFIG_DIR", &self.home)
-            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
-            .envs(env.iter().copied());
+        let mut command = self.command(command_args, args, env);
 
         let Some(input) = stdin else {
             return command.stdin(Stdio::null()).output().unwrap();
@@ -76,6 +67,30 @@ impl Fixture {
         child.stdin.take().unwrap().write_all(input).unwrap();
         child.wait_with_output().unwrap()
     }
+
+    fn spawn_command(&self, command_args: &[&str], args: &[&str], env: &[(&str, &str)]) -> Child {
+        self.command(command_args, args, env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    fn command(&self, command_args: &[&str], args: &[&str], env: &[(&str, &str)]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cometix"));
+        command
+            .args(command_args)
+            .args(args)
+            .current_dir(&self.cwd)
+            .env_clear()
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env("CLAUDE_CONFIG_DIR", &self.home)
+            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+            .envs(env.iter().copied());
+        command
+    }
 }
 
 impl Drop for Fixture {
@@ -86,6 +101,149 @@ impl Drop for Fixture {
 
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn mcp_server_key(name: &str, transport: &str, url: &str) -> String {
+    mcp_server_key_with_headers(name, transport, url, json!({}))
+}
+
+fn mcp_server_key_with_headers(name: &str, transport: &str, url: &str, headers: Value) -> String {
+    let config_json = serde_json::json!({
+        "type": transport,
+        "url": url,
+        "headers": headers
+    })
+    .to_string();
+    let digest = Sha256::digest(config_json.as_bytes());
+    let hash = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("{name}|{hash}")
+}
+
+fn read_http_request(stream: &mut TcpStream) -> (String, String, String) {
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).unwrap();
+    let mut content_length = 0;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" || line.is_empty() {
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':')
+            && key.eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse::<usize>().unwrap();
+        }
+    }
+    let mut body = vec![0; content_length];
+    reader.read_exact(&mut body).unwrap();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap().to_string();
+    let path = parts.next().unwrap().to_string();
+    (method, path, String::from_utf8(body).unwrap())
+}
+
+fn respond_json(stream: &mut TcpStream, status: &str, body: &Value) {
+    let body = serde_json::to_vec(body).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(&body).unwrap();
+}
+
+fn spawn_standard_oauth_fixture(
+    listener: TcpListener,
+    origin: String,
+    expected_revocations: usize,
+) -> std::thread::JoinHandle<Vec<String>> {
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut requests = Vec::new();
+        let mut completed = 0;
+        while Instant::now() < deadline {
+            let (mut stream, _) = match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                Err(error) => panic!("OAuth fixture accept failed: {error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let (method, path, body) = read_http_request(&mut stream);
+            requests.push(format!("{method} {path}"));
+            if method == "POST" && path == "/token" {
+                assert!(body.contains("grant_type=authorization_code"));
+                assert!(body.contains("code=fixture-code"));
+                respond_json(
+                    &mut stream,
+                    "200 OK",
+                    &json!({
+                        "access_token": "fixture-access-token",
+                        "refresh_token": "fixture-refresh-token",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "scope": "read write"
+                    }),
+                );
+                completed = 1;
+            } else if method == "POST" && path == "/revoke" {
+                assert!(body.contains("token_type_hint="));
+                respond_json(&mut stream, "200 OK", &json!({}));
+                completed += 1;
+            } else if method == "GET" && path.contains("oauth-protected-resource") {
+                let resource = if path.ends_with("/mcp") {
+                    format!("{origin}/mcp")
+                } else {
+                    format!("{origin}/")
+                };
+                respond_json(
+                    &mut stream,
+                    "200 OK",
+                    &json!({
+                        "resource": resource,
+                        "authorization_servers": [format!("{origin}/")],
+                        "scopes_supported": ["read", "write"]
+                    }),
+                );
+            } else if method == "GET" && path.contains("oauth-authorization-server") {
+                respond_json(
+                    &mut stream,
+                    "200 OK",
+                    &json!({
+                        "issuer": format!("{origin}/"),
+                        "authorization_endpoint": format!("{origin}/authorize"),
+                        "token_endpoint": format!("{origin}/token"),
+                        "revocation_endpoint": format!("{origin}/revoke"),
+                        "token_endpoint_auth_methods_supported": ["none"],
+                        "revocation_endpoint_auth_methods_supported": ["none"],
+                        "scopes_supported": ["read", "write"]
+                    }),
+                );
+            } else {
+                write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            }
+            if completed > 0 && completed >= expected_revocations {
+                break;
+            }
+        }
+        requests
+    })
 }
 
 fn assert_exit(output: Output, success: bool) {
@@ -294,6 +452,19 @@ fn mcp_add_writes_project_http_server_with_headers_and_oauth() {
             "oauth": {"clientId": "client-id", "callbackPort": 4312}
         })
     );
+    let server_key = mcp_server_key_with_headers(
+        "remote",
+        "http",
+        "https://example.invalid/mcp",
+        json!({
+            "Authorization": "Bearer secret-value",
+            "X-Key": "abc"
+        }),
+    );
+    assert_eq!(
+        read_json(&fixture.home.join(".credentials.json"))["mcpOAuthClientConfig"][&server_key]["clientSecret"],
+        "secret-value"
+    );
 }
 
 #[test]
@@ -384,6 +555,259 @@ fn mcp_add_rejects_duplicate_server_in_the_requested_scope() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[test]
+fn mcp_logout_clears_tokens_preserves_client_config_and_is_idempotent() {
+    let fixture = Fixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let url = format!("{origin}/mcp");
+    let add = fixture.run_command(
+        &["mcp", "add"],
+        &["--transport", "http", "remote", &url],
+        None,
+        &[],
+    );
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let key = mcp_server_key("remote", "http", &url);
+    let server = spawn_standard_oauth_fixture(listener, origin.clone(), 2);
+    let credentials = json!({
+        "mcpOAuth": {
+            (key.as_str()): {
+                "serverName": "remote",
+                "serverUrl": url,
+                "accessToken": "access-secret",
+                "refreshToken": "refresh-secret",
+                "clientId": "client-id",
+                "expiresAt": 9999999999999u64,
+                "discoveryState": {"authorizationServerUrl": format!("{origin}/")}
+            }
+        },
+        "mcpOAuthClientConfig": {
+            (key.as_str()): {"clientSecret": "client-secret"}
+        },
+        "other": {"keep": true}
+    });
+    fs::write(
+        fixture.home.join(".credentials.json"),
+        serde_json::to_vec(&credentials).unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(&["mcp", "logout"], &["remote"], None, &[]);
+    let requests = server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Signed out of \"remote\". Run `claude mcp login remote` to authenticate again.\n"
+    );
+    let saved = read_json(&fixture.home.join(".credentials.json"));
+    assert!(saved["mcpOAuth"].get(&key).is_none());
+    assert_eq!(
+        saved["mcpOAuthClientConfig"][&key]["clientSecret"],
+        "client-secret"
+    );
+    assert_eq!(saved["other"]["keep"], true);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.as_str() == "POST /revoke")
+            .count(),
+        2,
+        "expected refresh and access tokens to be revoked locally, got {requests:?}"
+    );
+
+    let repeated = fixture.run_command(&["mcp", "logout"], &["remote"], None, &[]);
+    assert!(repeated.status.success());
+    assert_eq!(repeated.stdout, output.stdout);
+}
+
+#[test]
+fn mcp_login_completes_oauth_against_a_local_server_with_manual_callback() {
+    let fixture = Fixture::new();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server_url = format!("{origin}/mcp");
+    let callback_port_guard = TcpListener::bind("127.0.0.1:0").unwrap();
+    let callback_port = callback_port_guard.local_addr().unwrap().port();
+    let callback_port_text = callback_port.to_string();
+    let add = fixture.run_command(
+        &["mcp", "add"],
+        &[
+            "--transport",
+            "http",
+            "--client-id",
+            "fixture-client",
+            "--callback-port",
+            &callback_port_text,
+            "remote",
+            &server_url,
+        ],
+        None,
+        &[],
+    );
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let server = spawn_standard_oauth_fixture(listener, origin, 1);
+    drop(callback_port_guard);
+    let mut child = fixture.spawn_command(&["mcp", "login"], &["remote", "--no-browser"], &[]);
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut output = String::new();
+    let mut authorization_url = None;
+    let mut waiting_for_callback = false;
+    loop {
+        let mut line = String::new();
+        let bytes = stdout.read_line(&mut line).unwrap();
+        if bytes == 0 {
+            break;
+        }
+        if let Some(value) = line
+            .trim_end()
+            .strip_prefix("Authorization URL for \"remote\": ")
+        {
+            authorization_url = Some(url::Url::parse(value).unwrap());
+        }
+        if line.contains("Paste the redirect URL here:") {
+            waiting_for_callback = true;
+            output.push_str(&line);
+            break;
+        }
+        output.push_str(&line);
+    }
+
+    let authorization_url = authorization_url.expect("OAuth authorization URL should be printed");
+    assert!(waiting_for_callback, "{output}");
+    let state = authorization_url
+        .query_pairs()
+        .find(|(name, _)| name == "state")
+        .map(|(_, value)| value.into_owned())
+        .unwrap();
+    let redirect_uri = authorization_url
+        .query_pairs()
+        .find(|(name, _)| name == "redirect_uri")
+        .map(|(_, value)| value.into_owned())
+        .unwrap();
+    let mut callback_url = url::Url::parse(&redirect_uri).unwrap();
+    callback_url
+        .query_pairs_mut()
+        .append_pair("code", "fixture-code")
+        .append_pair("state", &state);
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{callback_url}").unwrap();
+    drop(stdin);
+    stdout.read_to_string(&mut output).unwrap();
+    let status = child.wait().unwrap();
+    let server_requests = server.join().unwrap();
+    let stderr = {
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut stderr)
+            .unwrap();
+        stderr
+    };
+
+    assert!(status.success(), "stdout={output}\nstderr={stderr}");
+    assert!(output.contains("Successfully authenticated with \"remote\"."));
+    assert!(!output.contains("fixture-access-token"));
+    assert!(!stderr.contains("fixture-access-token"));
+    assert!(
+        server_requests
+            .iter()
+            .any(|request| request == "GET /.well-known/oauth-authorization-server"),
+        "{server_requests:?}"
+    );
+    assert!(
+        server_requests
+            .iter()
+            .any(|request| request == "POST /token"),
+        "{server_requests:?}"
+    );
+
+    let key = mcp_server_key("remote", "http", &server_url);
+    let credentials = read_json(&fixture.home.join(".credentials.json"));
+    assert_eq!(
+        credentials["mcpOAuth"][&key]["accessToken"],
+        "fixture-access-token"
+    );
+    assert_eq!(
+        credentials["mcpOAuth"][&key]["refreshToken"],
+        "fixture-refresh-token"
+    );
+    assert_eq!(credentials["mcpOAuth"][&key]["scope"], "read write");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(fixture.home.join(".credentials.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn mcp_login_reports_missing_and_stdio_servers_without_starting_oauth() {
+    let fixture = Fixture::new();
+    let missing = fixture.run_command(&["mcp", "login"], &["missing", "--no-browser"], None, &[]);
+    assert!(!missing.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&missing.stderr).trim(),
+        "No MCP server named \"missing\". Run `claude mcp add` to add one."
+    );
+
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {"stdio": {"command": "node", "args": []}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let stdio = fixture.run_command(&["mcp", "login"], &["stdio", "--no-browser"], None, &[]);
+    assert!(!stdio.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&stdio.stderr).trim(),
+        "\"stdio\" doesn't support OAuth login — it's only available for HTTP and SSE servers."
+    );
+
+    let extra = fixture.run_command(
+        &["mcp", "login"],
+        &["missing", "unexpected", "--no-browser"],
+        None,
+        &[],
+    );
+    assert!(!extra.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&extra.stderr).trim(),
+        "error: unexpected argument 'unexpected'"
+    );
+
+    let extra_logout =
+        fixture.run_command(&["mcp", "logout"], &["missing", "unexpected"], None, &[]);
+    assert!(!extra_logout.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&extra_logout.stderr).trim(),
+        "error: unexpected argument 'unexpected'"
     );
 }
 

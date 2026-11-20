@@ -4331,14 +4331,6 @@ mod tests {
             .map(|info| info.version.as_str())
     }
 
-    /// CC `error`, which only a failed record carries.
-    fn failed_error(server: &McpServerConnection) -> Option<&str> {
-        match server {
-            McpServerConnection::Failed(failed) => failed.error.as_deref(),
-            _ => None,
-        }
-    }
-
     /// A connected record for `name` whose server declares resources.
     fn connected_with_resources(name: &str) -> McpServerConnection {
         let mut server = McpServerConnection::connected_for_test(
@@ -8866,7 +8858,7 @@ rl.on('line', line => {
     }
 
     #[test]
-    fn streamable_http_401_challenge_returns_unavailable_without_credential_or_auth_cache_write() {
+    fn streamable_http_401_challenge_returns_needs_auth_and_persists_step_up_state() {
         let _guard = TEST_ENV_LOCK.lock().unwrap();
         let config_home =
             std::env::temp_dir().join(format!("cometix-mcp-http-401-{}", uuid::Uuid::new_v4()));
@@ -8944,17 +8936,35 @@ rl.on('line', line => {
                     plugin_source: None,
                 };
                 let client = runtime::connect_to_server(SERVER, &config).await;
-                assert_eq!(client.connection_type(), McpServerConnectionType::Failed);
-                assert_eq!(
-                    failed_error(&client),
-                    Some(
-                        crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_UNAVAILABLE_MESSAGE
-                    )
-                );
+                assert_eq!(client.connection_type(), McpServerConnectionType::NeedsAuth);
                 server.await.expect("fixture server task");
                 let _ = drain_mcp_connection_callback_observations().await;
-                assert!(!config_home.join(".credentials.json").exists());
-                assert!(!config_home.join("mcp-needs-auth-cache.json").exists());
+                let credentials: Value = serde_json::from_slice(
+                    &std::fs::read(config_home.join(".credentials.json"))
+                        .expect("MCP OAuth discovery state should be persisted"),
+                )
+                .expect("credentials JSON");
+                let server_key = crate::services::mcp::auth::get_server_key(
+                    SERVER,
+                    "http",
+                    &server_url,
+                    &BTreeMap::new(),
+                );
+                let entry = credentials["mcpOAuth"][&server_key]
+                    .as_object()
+                    .expect("MCP OAuth entry");
+                assert_eq!(
+                    entry
+                        .iter()
+                        .find(|(key, _)| key.ends_with("Scope"))
+                        .and_then(|(_, value)| value.as_str()),
+                    Some("admin write")
+                );
+                assert_eq!(
+                    entry["discoveryState"]["resourceMetadataUrl"],
+                    format!("http://{addr}/.well-known/oauth-protected-resource/mcp")
+                );
+                assert!(config_home.join("mcp-needs-auth-cache.json").exists());
             });
 
         let _ = std::fs::remove_dir_all(config_home);

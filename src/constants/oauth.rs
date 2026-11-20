@@ -37,12 +37,18 @@ pub const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
 /// Maps to: CC `constants/oauth.ts:113-114` `MCP_CLIENT_METADATA_URL`.
 pub const MCP_CLIENT_METADATA_URL: &str = "https://claude.ai/oauth/claude-code-client-metadata";
 
-/// No CC counterpart. This is the sole user-authorized L2 product switch for
-/// OAuth network, process/listener, credential-storage, revocation, and
-/// credential-cache side effects. It is intentionally compile-time only.
+/// No CC counterpart. This is the default-closed product switch for Claude
+/// account OAuth and XAA side effects. Standard MCP OAuth has a separate,
+/// explicit switch below so enabling `mcp login/logout` does not enable account
+/// authentication. Both are compile-time only.
 pub const OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED: bool = false;
 
-/// Stable message for the user-authorized default-closed OAuth outlet gate.
+/// Standard MCP server OAuth is independently enabled for its CLI and TUI
+/// flows. It does not enable Claude account OAuth, XAA, or other credential
+/// side effects guarded by the product-wide switch.
+pub const MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED: bool = true;
+
+/// Stable message for a disabled OAuth side-effect outlet.
 pub const OAUTH_CREDENTIAL_SIDE_EFFECTS_UNAVAILABLE_MESSAGE: &str =
     "OAuth credential side effects are unavailable in this product build";
 
@@ -249,8 +255,9 @@ mod tests {
     }
 
     #[test]
-    fn oauth_side_effect_switch_is_single_typed_and_default_closed() {
+    fn account_and_mcp_oauth_side_effect_switches_are_independent() {
         assert!(!OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED);
+        assert!(MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED);
         let error = anyhow::Error::new(OAuthCredentialSideEffectsUnavailable);
         assert_eq!(
             error.root_cause().to_string(),

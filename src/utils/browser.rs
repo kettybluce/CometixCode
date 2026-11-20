@@ -13,6 +13,23 @@ use std::process::{Command, Stdio};
 /// before the canonical product gate rejects the final process spawn. `openPath`
 /// remains available for unrelated local-path launches.
 pub async fn open_browser(url: &str) -> anyhow::Result<bool> {
+    open_browser_with_gate(
+        url,
+        crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED,
+    )
+    .await
+}
+
+/// Opens an MCP OAuth authorization URL while keeping account OAuth gated.
+pub async fn open_mcp_oauth_browser(url: &str) -> anyhow::Result<bool> {
+    open_browser_with_gate(
+        url,
+        crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED,
+    )
+    .await
+}
+
+async fn open_browser_with_gate(url: &str, side_effects_enabled: bool) -> anyhow::Result<bool> {
     let Ok(parsed_url) = reqwest::Url::parse(url) else {
         return Ok(false);
     };
@@ -52,7 +69,7 @@ pub async fn open_browser(url: &str) -> anyhow::Result<bool> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+    if !side_effects_enabled {
         return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
     }
     Ok(command.spawn().is_ok())

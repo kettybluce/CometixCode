@@ -5,7 +5,7 @@
 //! transport code consumes its results; slash commands and UI components must
 //! not implement OAuth protocol details themselves.
 
-use super::oauth_port::{build_redirect_uri, find_available_port};
+use super::oauth_port::build_redirect_uri;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -565,7 +565,7 @@ mod runtime {
             let request = client
                 .get(configured_metadata_url)
                 .header(reqwest::header::ACCEPT, "application/json");
-            if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+            if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
                 return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
             }
             let response = request.send().await?;
@@ -583,7 +583,7 @@ mod runtime {
         let manager =
             AuthorizationManager::new_with_oauth_http_client(server_url, oauth_http_client()?)
                 .await?;
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         match manager.resolve_metadata().await {
@@ -678,7 +678,8 @@ mod runtime {
     }
 
     fn write_credentials_json(value: &Value) -> anyhow::Result<()> {
-        let status = crate::utils::secure_storage::get_secure_storage().update(value)?;
+        let status = crate::utils::secure_storage::get_secure_storage()
+            .update_mcp_oauth_credentials(value)?;
         if status.success {
             Ok(())
         } else {
@@ -1338,7 +1339,7 @@ mod runtime {
         // Deviation (L2, user-authorized OAuth safety gate): seeding rmcp's
         // mutable credential store is a credential-cache outlet. Metadata and
         // the complete source-shaped stored value are prepared first.
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         store.save(stored_credentials).await?;
@@ -1361,8 +1362,9 @@ mod runtime {
             // Deviation (L2, user-authorized OAuth safety gate): CC
             // `services/mcp/auth.ts:2222-2240` refreshes with the selected
             // metadata/client/token state. All preparation above remains live;
-            // only the final SDK credential exchange is default-closed.
-            if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+            // only the final SDK credential exchange is controlled by the MCP
+            // OAuth side-effect switch.
+            if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
                 return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
             }
             match manager.refresh_token().await {
@@ -1626,7 +1628,7 @@ mod runtime {
         // Deviation (L2, user-authorized OAuth safety gate): CC
         // `services/mcp/auth.ts:381-456` sends the prepared RFC 7009 request.
         // Cometix rejects at the final credential HTTP outlet.
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         let response = request.send().await?;
@@ -1653,7 +1655,7 @@ mod runtime {
                 // Deviation (L2, same OAuth safety gate): the source's
                 // non-compliant Bearer retry is independently guarded so no
                 // alternate revocation send bypasses the product switch.
-                if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+                if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
                     return Err(
                         crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into(),
                     );
@@ -2185,7 +2187,7 @@ mod runtime {
         let request = client
             .get(&resource_metadata_url)
             .header(reqwest::header::ACCEPT, "application/json");
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         let response = request.send().await?;
@@ -2288,7 +2290,7 @@ mod runtime {
         }
         let port = match oauth_configured_callback_port(config) {
             Some(port) => port,
-            None => find_available_port().await?,
+            None => super::super::oauth_port::find_available_mcp_oauth_port().await?,
         };
         let redirect_uri = build_redirect_uri(Some(port));
 
@@ -2348,9 +2350,12 @@ mod runtime {
             .and_then(Value::as_bool)
             .unwrap_or(false)
         {
-            let client_metadata_url = crate::utils::process_env::var("MCP_OAUTH_CLIENT_METADATA_URL")
-                .truthy()
-                .unwrap_or_else(|| crate::constants::oauth::MCP_CLIENT_METADATA_URL.to_string());
+            let client_metadata_url =
+                crate::utils::process_env::var("MCP_OAUTH_CLIENT_METADATA_URL")
+                    .truthy()
+                    .unwrap_or_else(|| {
+                        crate::constants::oauth::MCP_CLIENT_METADATA_URL.to_string()
+                    });
             let client_config =
                 OAuthClientConfig::new(client_metadata_url.clone(), redirect_uri.clone())
                     .with_scopes(scopes.clone());
@@ -2361,7 +2366,7 @@ mod runtime {
             // Deviation (L2, user-authorized OAuth safety gate): dynamic
             // registration can mint a client secret. Metadata, scopes, and the
             // complete registration inputs remain prepared before the SDK send.
-            if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+            if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
                 return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
             }
             let client_config = manager
@@ -2373,14 +2378,14 @@ mod runtime {
         // authorization-request construction to mutation of its PKCE/state
         // store in `get_authorization_url`. Guard the SDK method boundary so a
         // blocked flow leaves that credential state cache unchanged.
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         let authorization_url = manager.get_authorization_url(&scope_refs).await?;
         // Deviation (L2, same gate): independently guard the callback listener
         // bind so this outlet cannot bypass the product switch if SDK behavior
         // or the switch changes later.
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         let listener = TokioTcpListener::bind(("127.0.0.1", port))
@@ -2402,7 +2407,7 @@ mod runtime {
             receiver
         });
         if !options.skip_browser_open {
-            let _ = crate::utils::browser::open_browser(&authorization_url).await?;
+            let _ = crate::utils::browser::open_mcp_oauth_browser(&authorization_url).await?;
         }
 
         if options
@@ -2423,8 +2428,8 @@ mod runtime {
         // Deviation (L2, user-authorized OAuth safety gate): CC
         // `services/mcp/auth.ts:1219-1224` performs the final authorization-code
         // token exchange only after callback/state validation. The SDK request
-        // is fully prepared before this default-closed outlet.
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        // is fully prepared before this MCP OAuth side-effect outlet.
+        if !crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         let token_response = manager
@@ -2455,13 +2460,13 @@ mod runtime {
     }
 }
 
+pub(crate) use runtime::oauth_http_client;
 pub use runtime::{
     clear_mcp_client_config, fetch_auth_server_metadata, get_mcp_client_config,
     perform_mcp_oauth_flow, record_mcp_www_authenticate_challenge,
     refresh_mcp_oauth_access_token_after_auth_failure, revoke_server_tokens,
     save_mcp_client_secret,
 };
-pub(crate) use runtime::oauth_http_client;
 
 #[cfg(test)]
 mod tests {
@@ -2492,11 +2497,20 @@ mod tests {
         crate::utils::tls_provider::install_crypto_provider();
         let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_address = proxy.local_addr().unwrap();
-        let _env: Vec<_> = ["https_proxy", "http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"]
-            .into_iter()
-            .map(EnvVarGuard::unset)
-            .chain([EnvVarGuard::set("HTTPS_PROXY", format!("http://{proxy_address}"))])
-            .collect();
+        let _env: Vec<_> = [
+            "https_proxy",
+            "http_proxy",
+            "HTTP_PROXY",
+            "no_proxy",
+            "NO_PROXY",
+        ]
+        .into_iter()
+        .map(EnvVarGuard::unset)
+        .chain([EnvVarGuard::set(
+            "HTTPS_PROXY",
+            format!("http://{proxy_address}"),
+        )])
+        .collect();
         let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel();
         let server = tokio::spawn(async move {
             loop {
@@ -2525,7 +2539,10 @@ mod tests {
         let first = seen_rx.recv().await.expect("a request reached the proxy");
         assert!(first.starts_with("GET http://mcp.invalid/"), "{first}");
         while let Ok(line) = seen_rx.try_recv() {
-            assert!(!line.contains("other.invalid"), "followed a cross-origin redirect: {line}");
+            assert!(
+                !line.contains("other.invalid"),
+                "followed a cross-origin redirect: {line}"
+            );
         }
     }
 
@@ -2733,35 +2750,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn mcp_revocation_send_uses_canonical_default_closed_gate() {
-        crate::utils::tls_provider::install_crypto_provider();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let endpoint = format!("http://{}/revoke", listener.local_addr().unwrap());
-        let error = runtime::revoke_token(
-            "docs",
-            &endpoint,
-            "refresh-token",
-            "refresh_token",
-            Some("client"),
-            Some("secret"),
-            Some("access-token"),
-            "client_secret_post",
-        )
-        .await
-        .expect_err("OAuth revocation send must be default-closed");
-        assert!(
-            error
-                .downcast_ref::<crate::constants::oauth::OAuthCredentialSideEffectsUnavailable>()
-                .is_some()
-        );
-        assert!(matches!(
-            listener.accept(),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
-        ));
-    }
-
     fn test_http_config() -> crate::services::mcp::types::ScopedMcpServerConfig {
         crate::services::mcp::types::ScopedMcpServerConfig {
             name: None,
@@ -2800,30 +2788,27 @@ mod tests {
     }
 
     #[test]
-    fn mcp_client_secret_helpers_are_default_closed_without_changing_bytes() {
+    fn mcp_client_secret_helpers_update_only_the_mcp_credential_entry() {
         with_temp_config_home(|home| {
             let credentials_path = home.join(".credentials.json");
             let original = br#"{"mcpOAuthClientConfig":{},"other":"preserved"}"#;
             std::fs::write(&credentials_path, original).unwrap();
-            let error = save_mcp_client_secret("docs", &test_http_config(), "secret-value")
-                .expect_err("MCP OAuth client-secret write must be default-closed");
-            assert!(
-                error
-                    .downcast_ref::<crate::constants::oauth::OAuthCredentialSideEffectsUnavailable>(
-                    )
-                    .is_some()
+            save_mcp_client_secret("docs", &test_http_config(), "secret-value").unwrap();
+            let saved: Value =
+                serde_json::from_slice(&std::fs::read(&credentials_path).unwrap()).unwrap();
+            let server_key =
+                get_server_key("docs", "http", "https://example.com/mcp", &BTreeMap::new());
+            assert_eq!(
+                saved["mcpOAuthClientConfig"][&server_key]["clientSecret"],
+                "secret-value"
             );
-            assert_eq!(std::fs::read(&credentials_path).unwrap(), original);
+            assert_eq!(saved["other"], "preserved");
 
-            let error = clear_mcp_client_config("docs", &test_http_config())
-                .expect_err("MCP OAuth client-secret delete must be default-closed");
-            assert!(
-                error
-                    .downcast_ref::<crate::constants::oauth::OAuthCredentialSideEffectsUnavailable>(
-                    )
-                    .is_some()
-            );
-            assert_eq!(std::fs::read(&credentials_path).unwrap(), original);
+            clear_mcp_client_config("docs", &test_http_config()).unwrap();
+            let cleared: Value =
+                serde_json::from_slice(&std::fs::read(&credentials_path).unwrap()).unwrap();
+            assert!(cleared["mcpOAuthClientConfig"].get(&server_key).is_none());
+            assert_eq!(cleared["other"], "preserved");
         });
     }
 
@@ -2936,12 +2921,12 @@ mod tests {
     }
 
     #[test]
-    fn blocked_www_authenticate_cache_write_returns_unavailable_and_preserves_bytes() {
+    fn mcp_www_authenticate_challenge_persists_step_up_state_and_preserves_other_data() {
         with_temp_config_home(|home| {
             let credentials_path = home.join(".credentials.json");
             let original = br#"{"other":"preserved"}"#;
             std::fs::write(&credentials_path, original).unwrap();
-            let error = record_mcp_www_authenticate_challenge(
+            let recorded = record_mcp_www_authenticate_challenge(
                 "docs",
                 &test_http_config(),
                 "http",
@@ -2949,24 +2934,45 @@ mod tests {
                 r#"Bearer error="insufficient_scope", scope="admin write", resource_metadata="/.well-known/oauth-protected-resource/mcp""#,
                 None,
             )
-            .expect_err("credential-related challenge cache write must be closed");
-            assert!(
-                error
-                    .downcast_ref::<crate::constants::oauth::OAuthCredentialSideEffectsUnavailable>(
-                    )
-                    .is_some()
+            .unwrap();
+            assert!(recorded);
+            let saved: Value =
+                serde_json::from_slice(&std::fs::read(&credentials_path).unwrap()).unwrap();
+            let server_key =
+                get_server_key("docs", "http", "https://example.com/mcp", &BTreeMap::new());
+            assert_eq!(saved["other"], "preserved");
+            let mcp_oauth = saved
+                .as_object()
+                .unwrap()
+                .values()
+                .find(|value| value.get(&server_key).is_some())
+                .and_then(Value::as_object)
+                .unwrap();
+            let entry = mcp_oauth.get(&server_key).unwrap();
+            assert_eq!(
+                entry
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .find(|(key, _)| key.ends_with("Scope"))
+                    .and_then(|(_, value)| value.as_str()),
+                Some("admin write")
             );
-            assert_eq!(std::fs::read(&credentials_path).unwrap(), original);
+            assert_eq!(
+                entry["discoveryState"]["resourceMetadataUrl"],
+                "https://example.com/.well-known/oauth-protected-resource/mcp"
+            );
         });
     }
 
     #[test]
-    fn blocked_mcp_token_delete_preserves_step_up_entry_bytes() {
+    fn mcp_token_delete_preserves_only_step_up_discovery_state() {
         with_temp_config_home(|home| {
             let server_key =
                 get_server_key("docs", "http", "https://example.com/mcp", &BTreeMap::new());
             let credentials_path = home.join(".credentials.json");
             let original = serde_json::json!({
+                "other": "preserved",
                 "mcpOAuth": {
                     server_key.clone(): {
                         "serverName": "docs",
@@ -2984,22 +2990,32 @@ mod tests {
             })
             .to_string();
             std::fs::write(&credentials_path, &original).unwrap();
-            let error = tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap()
                 .block_on(revoke_server_tokens("docs", &test_http_config(), true))
-                .expect_err("MCP OAuth token deletion must be default-closed");
-            assert!(
-                error
-                    .downcast_ref::<crate::constants::oauth::OAuthCredentialSideEffectsUnavailable>(
-                    )
-                    .is_some()
+                .unwrap();
+            let cleared: Value =
+                serde_json::from_slice(&std::fs::read(&credentials_path).unwrap()).unwrap();
+            let entry = &cleared["mcpOAuth"][&server_key];
+            assert_eq!(entry["accessToken"], "");
+            assert_eq!(entry["expiresAt"], 0);
+            assert_eq!(entry["stepUpScope"], "admin write");
+            assert_eq!(
+                entry["discoveryState"]["authorizationServerUrl"],
+                "https://auth.example.com"
             );
             assert_eq!(
-                std::fs::read_to_string(&credentials_path).unwrap(),
-                original
+                entry["discoveryState"]["resourceMetadataUrl"],
+                "https://example.com/.well-known/oauth-protected-resource/mcp"
             );
+            assert!(
+                entry["discoveryState"]
+                    .get("authorizationServerMetadata")
+                    .is_none()
+            );
+            assert_eq!(cleared["other"], "preserved");
         });
     }
 

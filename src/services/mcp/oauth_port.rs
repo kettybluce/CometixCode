@@ -37,6 +37,20 @@ fn get_mcp_oauth_callback_port() -> Option<u16> {
 
 /// Maps to: CC `services/mcp/oauthPort.ts:36-92` `findAvailablePort`.
 pub async fn find_available_port() -> anyhow::Result<u16> {
+    find_available_port_with_gate(crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED)
+        .await
+}
+
+/// Finds a callback port for standard MCP OAuth without enabling the
+/// product-wide Claude account OAuth outlet.
+pub async fn find_available_mcp_oauth_port() -> anyhow::Result<u16> {
+    find_available_port_with_gate(
+        crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED,
+    )
+    .await
+}
+
+async fn find_available_port_with_gate(side_effects_enabled: bool) -> anyhow::Result<u16> {
     if let Some(configured_port) = get_mcp_oauth_callback_port() {
         return Ok(configured_port);
     }
@@ -50,7 +64,7 @@ pub async fn find_available_port() -> anyhow::Result<u16> {
         // Deviation (L2, user-authorized OAuth safety gate): CC temporarily
         // binds this prepared random callback port. Reject only at the final
         // OAuth-only socket outlet; do not extract a parallel gate function.
-        if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+        if !side_effects_enabled {
             return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
         }
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
@@ -60,7 +74,7 @@ pub async fn find_available_port() -> anyhow::Result<u16> {
 
     // The source independently tries its fallback listener, so this alternate
     // final socket outlet uses the same sole product switch.
-    if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
+    if !side_effects_enabled {
         return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
     }
     if TcpListener::bind(("127.0.0.1", REDIRECT_PORT_FALLBACK)).is_ok() {
@@ -120,5 +134,17 @@ mod tests {
                 .downcast_ref::<crate::constants::oauth::OAuthCredentialSideEffectsUnavailable>()
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_oauth_port_probe_uses_its_scoped_switch() {
+        let _lock = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _env = EnvVarGuard::unset("MCP_OAUTH_CALLBACK_PORT");
+        assert!(!crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED);
+        let port = find_available_mcp_oauth_port().await.unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        drop(listener);
     }
 }

@@ -14,7 +14,7 @@ use crate::utils::settings::constants::SettingSource;
 use crate::utils::settings::get_settings_file_path_for_source;
 use iocraft::prelude::*;
 use serde_json::Value;
-use std::io::{IsTerminal, Read};
+use std::io::{BufRead, IsTerminal, Read};
 
 #[cfg(test)]
 pub const NO_MCP_SERVERS_CONFIGURED: &str =
@@ -57,6 +57,8 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             "add" => print_mcp_add_help(),
             "get" => print_mcp_get_help(),
             "list" => print_mcp_list_help(),
+            "login" => print_mcp_login_help(),
+            "logout" => print_mcp_logout_help(),
             "remove" => print_mcp_remove_help(),
             "reset-project-choices" => print_mcp_reset_project_choices_help(),
             _ => return None,
@@ -79,6 +81,20 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             }
             Err(error) => {
                 eprintln!("Error: {error}");
+                1
+            }
+        }),
+        "login" => Some(match run_mcp_login_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        }),
+        "logout" => Some(match run_mcp_logout_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
                 1
             }
         }),
@@ -159,6 +175,18 @@ Options:
 fn print_mcp_add_json_help() {
     println!(
         "Usage: cometix mcp add-json [options] <name> <json|->\n\nOptions:\n  -s, --scope <scope>  local (default), user, or project\n      --help           Show this help\n\nUse '-' as the JSON argument to read the server configuration from stdin."
+    );
+}
+
+fn print_mcp_login_help() {
+    println!(
+        "Usage: cometix mcp login [options] <name>\n\nAuthenticate with an MCP server (HTTP, SSE, or claude.ai connector)\n\nOptions:\n  -h, --help    Display help for command\n  --no-browser  Print the authorization URL instead of opening a browser (for\n                SSH or no-browser sessions — paste the redirect URL back when\n                prompted)"
+    );
+}
+
+fn print_mcp_logout_help() {
+    println!(
+        "Usage: cometix mcp logout [options] <name>\n\nClear stored OAuth credentials for an MCP server\n\nOptions:\n  -h, --help  Display help for command"
     );
 }
 
@@ -730,6 +758,118 @@ fn run_mcp_add_json_cli(args: &[String]) -> anyhow::Result<(String, &'static str
     let server = read_mcp_add_json_payload(&payload)?;
     crate::services::mcp::config::add_mcp_server_config(&name, &server, scope)?;
     Ok((name, scope.as_str()))
+}
+
+fn run_mcp_logout_cli(args: &[String]) -> anyhow::Result<()> {
+    let mut name = None;
+    for arg in args {
+        if arg.starts_with('-') {
+            anyhow::bail!("error: unknown option '{arg}'");
+        }
+        if name.replace(arg.as_str()).is_some() {
+            anyhow::bail!("error: unexpected argument '{arg}'");
+        }
+    }
+    let Some(name) = name else {
+        anyhow::bail!("error: missing required argument 'name'");
+    };
+    let config = crate::services::mcp::config::get_mcp_config_by_name_readonly(name)
+        .ok_or_else(|| mcp_cli_missing_server_error(name))?;
+    if !matches!(
+        config.transport,
+        crate::services::mcp::types::Transport::Http | crate::services::mcp::types::Transport::Sse
+    ) {
+        anyhow::bail!(
+            "\"{name}\" doesn't support OAuth logout — it's only available for HTTP and SSE servers."
+        );
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .build()?;
+    runtime.block_on(crate::services::mcp::auth::revoke_server_tokens(
+        name, &config, false,
+    ))?;
+    println!("Signed out of \"{name}\". Run `claude mcp login {name}` to authenticate again.");
+    Ok(())
+}
+
+fn run_mcp_login_cli(args: &[String]) -> anyhow::Result<()> {
+    let mut name = None;
+    let mut no_browser = false;
+    for arg in args {
+        if arg == "--no-browser" {
+            no_browser = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            anyhow::bail!("error: unknown option '{arg}'");
+        }
+        if name.replace(arg.as_str()).is_some() {
+            anyhow::bail!("error: unexpected argument '{arg}'");
+        }
+    }
+    let Some(name) = name else {
+        anyhow::bail!("error: missing required argument 'name'");
+    };
+    let config = crate::services::mcp::config::get_mcp_config_by_name_readonly(name)
+        .ok_or_else(|| mcp_cli_missing_server_error(name))?;
+    if !matches!(
+        config.transport,
+        crate::services::mcp::types::Transport::Http | crate::services::mcp::types::Transport::Sse
+    ) {
+        anyhow::bail!(
+            "\"{name}\" doesn't support OAuth login — it's only available for HTTP and SSE servers."
+        );
+    }
+    println!("Starting authentication for \"{name}\"…");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .build()?;
+    let name_for_url = name.to_string();
+    let options = crate::services::mcp::auth::McpOAuthFlowOptions {
+        skip_browser_open: no_browser,
+        on_authorization_url: Some(std::sync::Arc::new(move |url| {
+            println!("Authorization URL for \"{name_for_url}\": {url}");
+        })),
+        on_waiting_for_callback: Some(std::sync::Arc::new(|submit| {
+            println!("Paste the redirect URL here:");
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                if std::io::stdin().lock().read_line(&mut line).is_ok() {
+                    submit.submit(line);
+                }
+            });
+        })),
+        ..Default::default()
+    };
+    let result = runtime.block_on(crate::services::mcp::auth::perform_mcp_oauth_flow(
+        name, &config, options,
+    ))?;
+    if result.access_token_saved {
+        println!("Successfully authenticated with \"{name}\".");
+    }
+    Ok(())
+}
+
+fn mcp_cli_missing_server_error(name: &str) -> anyhow::Error {
+    let global = crate::utils::config::load_global_config();
+    let project = crate::utils::config::get_current_project_config();
+    let mut names =
+        crate::services::mcp::config::all_configured_mcp_servers_readonly(&global, &project)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+    names.sort();
+    if names.is_empty() {
+        anyhow::anyhow!("No MCP server named \"{name}\". Run `claude mcp add` to add one.")
+    } else {
+        anyhow::anyhow!(
+            "No MCP server named \"{name}\". Configured servers: {}",
+            names.join(", ")
+        )
+    }
 }
 
 fn run_mcp_add_cli(args: &[String]) -> anyhow::Result<()> {

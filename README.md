@@ -115,6 +115,18 @@ Reset the current project's approved and rejected `.mcp.json` server choices:
 cometix mcp reset-project-choices
 ```
 
+Authenticate an HTTP/SSE MCP server or clear its stored OAuth credentials:
+
+```sh
+cometix mcp login <name>
+cometix mcp login --no-browser <name>
+cometix mcp logout <name>
+```
+
+`--no-browser` prints the authorization URL and waits for the redirect URL on
+stdin. Standard MCP OAuth credentials are stored in `.credentials.json` under
+the configured Claude directory; Claude account OAuth remains a separate flow.
+
 ### Cross-compiling for Windows
 
 ```sh

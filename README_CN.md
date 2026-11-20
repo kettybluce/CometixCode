@@ -105,6 +105,17 @@ cometix mcp remove [--scope local|user|project] <name>
 cometix mcp reset-project-choices
 ```
 
+对 HTTP/SSE MCP server 执行 OAuth 登录或清除已保存的 OAuth 凭据：
+
+```sh
+cometix mcp login <name>
+cometix mcp login --no-browser <name>
+cometix mcp logout <name>
+```
+
+`--no-browser` 会打印授权 URL，并等待从 stdin 粘贴回调 URL。标准 MCP OAuth
+凭据保存在配置目录的 `.credentials.json` 中；Claude 账号 OAuth 仍由独立的账号认证流程管理。
+
 ### 交叉编译 Windows 版
 
 需要 mingw-w64 工具链。

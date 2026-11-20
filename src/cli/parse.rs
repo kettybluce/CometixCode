@@ -717,6 +717,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_mcp_login_and_logout_are_live_noninteractive_subcommands() {
+        for args in [["mcp", "login", "remote"], ["mcp", "logout", "remote"]] {
+            let c = parse_cli_config(&argv(&args));
+            assert_eq!(c.subcommand.as_deref(), Some("mcp"));
+            assert!(c.unimplemented_reasons().is_empty());
+        }
+    }
+
+    #[test]
     fn parse_unknown_flag() {
         let c = parse_cli_config(&argv(&["--not-a-real-flag"]));
         assert_eq!(c.unknown_flags, vec!["--not-a-real-flag".to_string()]);
