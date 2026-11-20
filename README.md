@@ -76,6 +76,14 @@ printf '%s' '{"type":"http","url":"https://example.com/mcp"}' | cometix mcp add-
 
 The default scope is local to the current project. Use `--scope user` for user-wide configuration or `--scope project` to write `.mcp.json` in the current directory. The JSON may also be passed as the second argument. Server names may contain only ASCII letters, numbers, hyphens, and underscores.
 
+List configured MCP servers and check approved servers:
+
+```sh
+cometix mcp list
+```
+
+The list reports the configuration scope and a redacted health state. Pending project servers are shown as pending approval; credentials, URLs, commands, and headers are not printed.
+
 ### Cross-compiling for Windows
 
 ```sh

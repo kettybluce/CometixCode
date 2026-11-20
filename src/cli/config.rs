@@ -179,7 +179,7 @@ impl CliConfig {
             ("chrome", ImplStatus::Live),
             (
                 "worktree/tmux/remote/bg/daemon/subcommands",
-                if (self.subcommand.is_some() && !self.is_live_mcp_add_json())
+                if (self.subcommand.is_some() && !self.is_live_mcp_command())
                     || self.worktree
                     || self.tmux
                     || self.remote
@@ -228,7 +228,7 @@ impl CliConfig {
         }
 
         if let Some(sub) = &self.subcommand
-            && !self.is_live_mcp_add_json()
+            && !self.is_live_mcp_command()
         {
             reasons.push(sub.clone());
         }
@@ -265,11 +265,15 @@ impl CliConfig {
         reasons
     }
 
-    pub(crate) fn is_live_mcp_add_json(&self) -> bool {
+    pub(crate) fn is_live_mcp_command(&self) -> bool {
+        matches!(self.mcp_subcommand(), Some("add-json" | "list"))
+    }
+
+    fn mcp_subcommand(&self) -> Option<&str> {
         let Some(mcp_index) = self.argv.iter().position(|arg| arg == "mcp") else {
-            return false;
+            return None;
         };
-        self.argv.get(mcp_index + 1).map(String::as_str) == Some("add-json")
+        self.argv.get(mcp_index + 1).map(String::as_str)
     }
 
     pub fn print_help() {
@@ -309,6 +313,7 @@ Live:
       --agent <name>         Main-thread agent type (--agent / settings.agent)
       --plugin-dir <path>    Inline plugin directory (repeatable)
       --chrome / --no-chrome Claude in Chrome onboarding
+      mcp list                     List configured MCP servers and health
       mcp add-json <name> <json|->  Add an MCP server; '-' reads JSON from stdin
   -p, --print                Headless/print path
       --output-format / --input-format / --json-schema / --stream-json
@@ -318,7 +323,7 @@ Live:
 
 Unimplemented (parsed, then exit 1):
       --session-id / --fork-session
-      Subcommands: mcp (except add-json), auth, plugin, doctor, update, …
+      Subcommands: mcp (except list/add-json), auth, plugin, doctor, update, …
       --init / --init-only / --maintenance
       --worktree / --tmux / --remote / --bg / daemon
 "

@@ -47,7 +47,7 @@ pub fn dispatch(config: &CliConfig) -> Option<i32> {
 
     // Non-interactive MCP configuration commands own their stdin/stdout and
     // must run before the generic subcommand-unimplemented guard below.
-    if config.is_live_mcp_add_json() {
+    if config.is_live_mcp_command() {
         let reasons = config.unimplemented_reasons();
         if !reasons.is_empty() {
             return Some(exit_unimplemented(&reasons));

@@ -66,6 +66,14 @@ printf '%s' '{"type":"http","url":"https://example.com/mcp"}' | cometix mcp add-
 
 默认写入当前项目的 local 配置。通过 `--scope user` 写入用户配置，或通过 `--scope project` 写入当前目录的 `.mcp.json`。配置也可以直接作为第二个参数传入；MCP server 名称仅允许 ASCII 字母、数字、连字符和下划线。
 
+列出已配置的 MCP server 并检查已批准服务器的连接状态：
+
+```sh
+cometix mcp list
+```
+
+列表会显示配置范围和脱敏后的连接状态。待批准的项目服务器会标记为待批准；不会打印凭据、URL、启动命令或 headers。
+
 ### 交叉编译 Windows 版
 
 需要 mingw-w64 工具链。

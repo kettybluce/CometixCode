@@ -1,8 +1,10 @@
 use serde_json::{Value, json};
 use std::fs;
 use std::io::Write;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 const FAKE_TOKEN: &str = "cometix-stdin-test-token";
 const STDIO_CONFIG: &str = r#"{"command":"example-mcp-server"}"#;
@@ -40,9 +42,19 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str], stdin: Option<&[u8]>, env: &[(&str, &str)]) -> Output {
+        self.run_command(&["mcp", "add-json"], args, stdin, env)
+    }
+
+    fn run_command(
+        &self,
+        command_args: &[&str],
+        args: &[&str],
+        stdin: Option<&[u8]>,
+        env: &[(&str, &str)],
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_cometix"));
         command
-            .args(["mcp", "add-json"])
+            .args(command_args)
             .args(args)
             .current_dir(&self.cwd)
             .env_clear()
@@ -289,4 +301,121 @@ fn invalid_existing_server_prevents_project_config_mutation() {
         false,
     );
     assert_eq!(fs::read(project_path).unwrap(), original);
+}
+
+#[test]
+fn mcp_list_reports_empty_configuration() {
+    let fixture = Fixture::new();
+    let output = fixture.run_command(&["mcp", "list"], &[], None, &[]);
+    assert_exit(output, true);
+}
+
+#[test]
+fn mcp_list_reports_health_and_pending_project_servers_without_secrets() {
+    let fixture = Fixture::new();
+    let secret = "list-secret-token";
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "broken": {
+                    "command": "/bin/sh",
+                    "args": ["-c", "exit 1"],
+                    "env": {"TOKEN": secret}
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        fixture.project_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "pending-docs": {
+                    "type": "http",
+                    "url": "https://example.invalid/mcp?token=project-secret"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(&["mcp", "list"], &[], None, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("broken (user) - failed"), "stdout={stdout}");
+    assert!(
+        stdout.contains("pending-docs (project) - pending approval"),
+        "stdout={stdout}"
+    );
+    assert!(!stdout.contains(secret));
+    assert!(!stdout.contains("project-secret"));
+    assert!(!stderr.contains(secret));
+    assert!(!stderr.contains("project-secret"));
+}
+
+#[test]
+fn mcp_list_does_not_print_failed_http_url_with_credentials() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break Some(stream),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("HTTP fixture accept failed: {error}"),
+            }
+        };
+
+        if let Some(stream) = stream.as_mut() {
+            stream
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        }
+        stream.is_some()
+    });
+
+    let fixture = Fixture::new();
+    let secret = "mcp-list-query-token-sentinel";
+    let url = format!("http://{address}/mcp?access_token={secret}");
+    fs::write(
+        fixture.global_file(),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "remote": {
+                    "type": "http",
+                    "url": url
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = fixture.run_command(&["mcp", "list"], &[], None, &[]);
+    assert!(
+        server.join().unwrap(),
+        "MCP client did not reach the HTTP fixture"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.contains("remote (user) - failed"), "stdout={stdout}");
+    assert!(!stdout.contains(secret));
+    assert!(!stdout.contains(&url));
+    assert!(!stderr.contains(secret));
+    assert!(!stderr.contains(&url));
 }

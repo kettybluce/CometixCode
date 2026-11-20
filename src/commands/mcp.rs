@@ -49,26 +49,37 @@ pub fn maybe_run_mcp_xaa_cli(argv: &[String], rt: &tokio::runtime::Runtime) -> O
 /// the `-` payload is read from stdin so secrets never appear in argv/history.
 pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
     let mcp_index = argv.iter().position(|arg| arg == "mcp")?;
-    if argv.get(mcp_index + 1).map(String::as_str) != Some("add-json") {
-        return None;
-    }
-
+    let subcommand = argv.get(mcp_index + 1).map(String::as_str)?;
     let args = &argv[mcp_index + 2..];
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print_mcp_add_json_help();
+        match subcommand {
+            "add-json" => print_mcp_add_json_help(),
+            "list" => print_mcp_list_help(),
+            _ => return None,
+        }
         return Some(0);
     }
 
-    Some(match run_mcp_add_json_cli(args) {
-        Ok((name, scope)) => {
-            println!("Added MCP server '{name}' to {scope} scope.");
-            0
-        }
-        Err(error) => {
-            eprintln!("Error: {error}");
-            1
-        }
-    })
+    match subcommand {
+        "add-json" => Some(match run_mcp_add_json_cli(args) {
+            Ok((name, scope)) => {
+                println!("Added MCP server '{name}' to {scope} scope.");
+                0
+            }
+            Err(error) => {
+                eprintln!("Error: {error}");
+                1
+            }
+        }),
+        "list" => Some(match run_mcp_list_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                1
+            }
+        }),
+        _ => None,
+    }
 }
 
 const MCP_ADD_JSON_MAX_STDIN_BYTES: usize = 1024 * 1024;
@@ -77,6 +88,190 @@ fn print_mcp_add_json_help() {
     println!(
         "Usage: cometix mcp add-json [options] <name> <json|->\n\nOptions:\n  -s, --scope <scope>  local (default), user, or project\n      --help           Show this help\n\nUse '-' as the JSON argument to read the server configuration from stdin."
     );
+}
+
+fn print_mcp_list_help() {
+    println!("Usage: cometix mcp list\n\nList configured MCP servers and check approved servers.");
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum McpListState {
+    Connected,
+    Failed,
+    NeedsAuth,
+    Pending,
+    PendingApproval,
+    Disabled,
+}
+
+impl McpListState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::Failed => "failed",
+            Self::NeedsAuth => "needs authentication",
+            Self::Pending => "pending",
+            Self::PendingApproval => "pending approval",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+struct McpListRow {
+    name: String,
+    config: crate::services::mcp::types::ScopedMcpServerConfig,
+    state: Option<McpListState>,
+}
+
+fn project_mcp_list_state(name: &str) -> Option<McpListState> {
+    let status = crate::services::mcp::utils::get_project_mcp_server_status_from_settings(
+        name,
+        &crate::utils::settings::get_initial_settings(),
+        crate::utils::settings::is_setting_source_enabled(
+            crate::utils::settings::SettingSource::Project,
+        ),
+        crate::utils::settings::has_skip_dangerous_mode_permission_prompt(),
+        false,
+    );
+    match status {
+        crate::services::mcp::utils::ProjectMcpServerStatus::Pending => {
+            Some(McpListState::PendingApproval)
+        }
+        crate::services::mcp::utils::ProjectMcpServerStatus::Rejected => {
+            Some(McpListState::Disabled)
+        }
+        crate::services::mcp::utils::ProjectMcpServerStatus::Approved => None,
+    }
+}
+
+fn mcp_list_rows(runtime: &tokio::runtime::Runtime) -> anyhow::Result<Vec<McpListRow>> {
+    use crate::services::mcp::config::{get_all_mcp_configs, get_mcp_configs_by_scope_readonly};
+    use crate::services::mcp::types::ConfigScope;
+
+    let global_config = crate::utils::config::load_global_config();
+    let project_config = crate::utils::config::get_current_project_config();
+    let configured = runtime.block_on(get_all_mcp_configs(&global_config, &project_config))?;
+
+    let mut rows = configured
+        .servers
+        .into_iter()
+        .map(|(name, config)| McpListRow {
+            state: if config.scope == ConfigScope::Project {
+                project_mcp_list_state(&name)
+            } else {
+                crate::services::mcp::config::is_mcp_server_disabled_in_project_config(
+                    &name,
+                    &project_config,
+                )
+                .then_some(McpListState::Disabled)
+            },
+            name,
+            config,
+        })
+        .collect::<Vec<_>>();
+    let existing = rows
+        .iter()
+        .map(|row| row.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+
+    if !crate::services::mcp::config::does_enterprise_mcp_config_exist_readonly() {
+        let project_servers = get_mcp_configs_by_scope_readonly(
+            ConfigScope::Project,
+            &global_config,
+            &project_config,
+        );
+        for (name, config) in project_servers.servers {
+            if existing.contains(&name) {
+                continue;
+            }
+            let state = project_mcp_list_state(&name);
+            rows.push(McpListRow {
+                name,
+                config,
+                state,
+            });
+        }
+
+        // Configured servers omitted from the active aggregate are either
+        // disabled by project settings or hidden by policy. Retain explicitly
+        // disabled user/local entries in the list without trying to connect.
+        for scope in [ConfigScope::User, ConfigScope::Project, ConfigScope::Local] {
+            let scoped = get_mcp_configs_by_scope_readonly(scope, &global_config, &project_config);
+            for (name, config) in scoped.servers {
+                if existing.contains(&name)
+                    || rows.iter().any(|row| row.name == name)
+                    || !crate::services::mcp::config::is_mcp_server_disabled_in_project_config(
+                        &name,
+                        &project_config,
+                    )
+                {
+                    continue;
+                }
+                rows.push(McpListRow {
+                    name,
+                    config,
+                    state: Some(McpListState::Disabled),
+                });
+            }
+        }
+    }
+
+    Ok(rows)
+}
+
+fn run_mcp_list_cli(args: &[String]) -> anyhow::Result<()> {
+    if !args.is_empty() {
+        anyhow::bail!("unexpected argument '{}'; usage: cometix mcp list", args[0]);
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .build()?;
+    crate::utils::process_runtime::set_process_runtime_handle(runtime.handle().clone());
+    let rows = mcp_list_rows(&runtime)?;
+    if rows.is_empty() {
+        println!("No MCP servers configured.");
+        return Ok(());
+    }
+
+    println!("Checking MCP server health...\n");
+    let results = runtime.block_on(async {
+        futures::future::join_all(rows.iter().map(|row| async move {
+            if let Some(state) = row.state {
+                return (row.name.clone(), row.config.scope, state);
+            }
+            let connection =
+                crate::services::mcp::client::connect_to_server(&row.name, &row.config).await;
+            let state = match &connection {
+                crate::services::mcp::types::McpServerConnection::Connected(_) => {
+                    McpListState::Connected
+                }
+                crate::services::mcp::types::McpServerConnection::Failed(_) => McpListState::Failed,
+                crate::services::mcp::types::McpServerConnection::NeedsAuth(_) => {
+                    McpListState::NeedsAuth
+                }
+                crate::services::mcp::types::McpServerConnection::Pending(_) => {
+                    McpListState::Pending
+                }
+                crate::services::mcp::types::McpServerConnection::Disabled(_) => {
+                    McpListState::Disabled
+                }
+            };
+            if let crate::services::mcp::types::McpServerConnection::Connected(connected) =
+                &connection
+            {
+                crate::services::mcp::client::cleanup_connection(&connected.client);
+            }
+            (row.name.clone(), row.config.scope, state)
+        }))
+        .await
+    });
+
+    for (name, scope, state) in results {
+        println!("{name} ({}) - {}", scope.as_str(), state.as_str());
+    }
+    Ok(())
 }
 
 fn run_mcp_add_json_cli(args: &[String]) -> anyhow::Result<(String, &'static str)> {

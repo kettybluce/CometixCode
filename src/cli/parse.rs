@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn parse_subcommand_mcp() {
-        let c = parse_cli_config(&argv(&["mcp", "list"]));
+        let c = parse_cli_config(&argv(&["mcp"]));
         assert_eq!(c.subcommand.as_deref(), Some("mcp"));
         assert!(!c.unimplemented_reasons().is_empty());
     }
@@ -679,6 +679,13 @@ mod tests {
                 .map(|(_, status)| status),
             Some(super::super::config::ImplStatus::Live)
         );
+    }
+
+    #[test]
+    fn parse_mcp_list_is_a_live_noninteractive_subcommand() {
+        let c = parse_cli_config(&argv(&["mcp", "list"]));
+        assert_eq!(c.subcommand.as_deref(), Some("mcp"));
+        assert!(c.unimplemented_reasons().is_empty());
     }
 
     #[test]
