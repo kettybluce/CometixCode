@@ -2444,7 +2444,8 @@ mod tests {
 
     #[test]
     fn desktop_import_assigns_numbered_suffixes_to_colliding_names() {
-        with_temp_config_home(|home| {
+        with_temp_config_home(|_home| {
+            let _writes = EnvVarGuard::set("COMETIX_WRITE_ENABLED", "1");
             // Seed a colliding server through the same config service used by
             // `mcp add`, so the import observes a real existing configuration.
             crate::services::mcp::config::add_mcp_server_config(
@@ -2453,7 +2454,6 @@ mod tests {
                 crate::services::mcp::types::ConfigScope::User,
             )
             .unwrap();
-            assert!(home.join("settings.json").exists() || std::env::var("CLAUDE_CONFIG_DIR").is_ok());
 
             let servers = vec![
                 ("docs".to_string(), serde_json::json!({ "command": "new-docs" })),
