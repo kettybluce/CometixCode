@@ -8,6 +8,13 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     if config.bare {
         crate::utils::process_env::set("CLAUDE_CODE_SIMPLE", "1");
     }
+    // `--betas` feeds the same `ANTHROPIC_BETAS` channel that
+    // `utils/betas.rs` reads for every model-derived beta header. Joining with
+    // commas matches CC's comma-separated beta header format.
+    if !config.betas.is_empty() {
+        crate::utils::process_env::set("ANTHROPIC_BETAS", &config.betas.join(","));
+        crate::utils::betas::clear_betas_caches();
+    }
 }
 
 /// Short-circuit Unimplemented reasons to stderr; returns exit code `1`.
@@ -111,6 +118,22 @@ mod tests {
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
         ));
+    }
+
+    #[test]
+    fn dispatch_betas_sets_anthropic_betas_and_continues() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _betas = EnvVarGuard::unset("ANTHROPIC_BETAS");
+        let c = parse_cli_config(&argv(&["--betas", "beta-one", "beta-two"]));
+        assert!(c.unimplemented_reasons().is_empty());
+        assert_eq!(dispatch(&c), None);
+        assert_eq!(
+            crate::utils::process_env::var("ANTHROPIC_BETAS").as_deref(),
+            Some("beta-one,beta-two")
+        );
+        assert!(crate::utils::betas::get_all_model_betas("claude-sonnet-4-6")
+            .iter()
+            .any(|beta| beta == "beta-one"));
     }
 
     #[test]

@@ -59,6 +59,8 @@ pub struct CliConfig {
     pub task_budget: Option<String>,
     pub fallback_model: Option<String>,
     pub workload: Option<String>,
+    /// Maps to CC `--betas <betas...>`: extra beta headers for API key users.
+    pub betas: Vec<String>,
 
     // --- Permissions ---
     pub permission_mode: Option<String>,
@@ -308,6 +310,7 @@ Live:
       --mcp-debug            Deprecated alias for debug logging
       --mcp-config <configs...>  Load MCP JSON files or inline JSON
       --strict-mcp-config    Ignore non-enterprise auto-discovered MCP configs
+      --betas <betas...>     Beta headers for API key users (comma-joined)
       --max-thinking-tokens <n>  Thinking budget (deprecated; prefer --thinking)
       --max-turns / --max-budget-usd / --task-budget  Headless limits
       --fallback-model <model>  API fallback model for overloaded requests
@@ -331,6 +334,7 @@ Live:
       mcp remove [options] <name>  Remove an MCP server configuration
       mcp reset-project-choices    Reset project MCP server approvals
       mcp add [options] <name> <commandOrUrl> [args...]
+      mcp add-from-claude-desktop  Import MCP servers from Claude Desktop
       mcp login <name>              Authenticate with an MCP server
       mcp logout <name>             Clear stored MCP OAuth credentials
       mcp add-json <name> <json|->  Add an MCP server; '-' reads JSON from stdin

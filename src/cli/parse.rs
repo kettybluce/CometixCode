@@ -319,6 +319,13 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.append_system_prompt = strip_eq("--append-system-prompt", other)
                     .or_else(|| take_value(&args, &mut index));
             }
+            other if other.starts_with("--betas") => {
+                if let Some(value) = strip_eq("--betas", other) {
+                    config.betas.push(value);
+                } else {
+                    config.betas.extend(take_values_until_flag(&args, &mut index));
+                }
+            }
             other if other.starts_with("--mcp-config") => {
                 if let Some(value) = strip_eq("--mcp-config", other) {
                     config.mcp_config.push(value);
@@ -658,6 +665,22 @@ mod tests {
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
         assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_variadic_betas_like_commander() {
+        let config = parse_cli_config(&argv(&[
+            "--betas",
+            "beta-one",
+            "beta-two",
+            "--strict-mcp-config",
+        ]));
+        assert_eq!(config.betas, vec!["beta-one", "beta-two"]);
+        assert!(config.strict_mcp_config);
+        assert!(config.unimplemented_reasons().is_empty());
+
+        let inline = parse_cli_config(&argv(&["--betas=beta-inline"]));
+        assert_eq!(inline.betas, vec!["beta-inline"]);
     }
 
     #[test]
