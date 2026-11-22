@@ -199,6 +199,7 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            "--brief" => config.brief = true,
             other if other.starts_with("--advisor") => {
                 config.advisor_model =
                     strip_eq("--advisor", other).or_else(|| take_value(&args, &mut index));
@@ -671,6 +672,13 @@ mod tests {
         ]));
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
+        assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_brief_flag_is_live() {
+        let config = parse_cli_config(&argv(&["--brief"]));
+        assert!(config.brief);
         assert!(config.unimplemented_reasons().is_empty());
     }
 

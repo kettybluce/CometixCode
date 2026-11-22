@@ -8,6 +8,12 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     if config.bare {
         crate::utils::process_env::set("CLAUDE_CODE_SIMPLE", "1");
     }
+    // `--brief` maps to CC's `maybeActivateBrief()` at startup; set the opt-in
+    // flag directly because USER_MSG_OPT_IN is seeded once from the env var.
+    if config.brief {
+        crate::utils::process_env::set("CLAUDE_CODE_BRIEF", "1");
+        crate::bootstrap::state::set_user_msg_opt_in(true);
+    }
     // `--betas` feeds the same `ANTHROPIC_BETAS` channel that
     // `utils/betas.rs` reads for every model-derived beta header. Joining with
     // commas matches CC's comma-separated beta header format.
@@ -125,6 +131,22 @@ mod tests {
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
         ));
+    }
+
+    #[test]
+    fn dispatch_brief_sets_user_msg_opt_in_and_continues() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _brief = EnvVarGuard::unset("CLAUDE_CODE_BRIEF");
+        // Reset before and after so this test does not leak into siblings.
+        crate::bootstrap::state::set_user_msg_opt_in(false);
+        let c = parse_cli_config(&argv(&["--brief"]));
+        assert_eq!(dispatch(&c), None);
+        assert!(crate::bootstrap::state::get_user_msg_opt_in());
+        assert_eq!(
+            crate::utils::process_env::var("CLAUDE_CODE_BRIEF").as_deref(),
+            Some("1")
+        );
+        crate::bootstrap::state::set_user_msg_opt_in(false);
     }
 
     #[test]

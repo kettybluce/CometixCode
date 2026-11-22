@@ -69,7 +69,7 @@
 | `--autocompact <auto\|tokens>` | 设置本次会话 auto-compact window | 缺失 |
 | `--ax-screen-reader` | 无边框、无动画的屏幕阅读器输出 | 缺失 |
 | `--betas <betas...>` | API key 请求 beta headers | 已实现：variadic 解析（含 `--betas=` 形式）→ `ANTHROPIC_BETAS` 逗号拼接 + 缓存失效；`utils/betas.rs` 的 `get_all_model_betas` 已读取该变量。有 parser 与 dispatch 测试；真实 API 请求头未在本机抓包验收 |
-| `--brief` | 启用 SendUserMessage/brief 能力 | 缺失 |
+| `--brief` | 启用 SendUserMessage/brief 能力 | 已实现：解析 `--brief` 后在 dispatch 设置 `CLAUDE_CODE_BRIEF=1` 并直接置位 `USER_MSG_OPT_IN`，复用既有 BriefTool/brief system prompt 能力。有 parser 与 dispatch 单测 |
 | `--channels <plugin:...>` | 监听 MCP channel notifications | 缺失/关闭 |
 | `--cloud [description\|session_id\|url]` | 创建或继续 cloud session | 缺失 |
 | `--correlation-id <id>` | SDK/宿主关联标识 | 缺失 |
