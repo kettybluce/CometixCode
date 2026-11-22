@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `--ax-screen-reader` (flat, animation-free screen-reader output).
+    pub ax_screen_reader: bool,
     /// Maps to CC `--enable-auto-mode` (CLI opt-in for auto mode).
     pub enable_auto_mode: bool,
     /// Maps to CC `--prompt-suggestions [value]` (optional boolean value).
@@ -319,6 +321,7 @@ Live:
       --verbose              Verbose mode
       --bare                 Minimal/simple mode (CLAUDE_CODE_SIMPLE)
       --brief                Enable SendUserMessage (BriefTool) capability
+      --ax-screen-reader     Flat, animation-free screen-reader output
       --enable-auto-mode     CLI opt-in for auto mode
       --prompt-suggestions [true|false]  Enable predicted next-prompt suggestions
       --model <model>        Session model (or `default`)

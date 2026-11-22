@@ -8,6 +8,12 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     if config.bare {
         crate::utils::process_env::set("CLAUDE_CODE_SIMPLE", "1");
     }
+    // `--ax-screen-reader` maps to CC's accessibility mode: flat text, no
+    // decorative borders or animations. The existing render path reads
+    // `CLAUDE_CODE_ACCESSIBILITY` (TextInput cursor gate, etc.).
+    if config.ax_screen_reader {
+        crate::utils::process_env::set("CLAUDE_CODE_ACCESSIBILITY", "1");
+    }
     // `--enable-auto-mode` is the persistent-consent CLI opt-in. Set the flag
     // that `has_auto_mode_opt_in_any_source()` / permission setup read; the
     // feature gate itself still decides whether auto mode is actually usable.
@@ -143,6 +149,21 @@ mod tests {
         assert_eq!(dispatch(&c), None);
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
+        ));
+    }
+
+    #[test]
+    fn dispatch_ax_screen_reader_sets_accessibility_env_and_continues() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::unset("CLAUDE_CODE_ACCESSIBILITY");
+        let c = parse_cli_config(&argv(&["--ax-screen-reader"]));
+        assert_eq!(dispatch(&c), None);
+        assert_eq!(
+            crate::utils::process_env::var("CLAUDE_CODE_ACCESSIBILITY").as_deref(),
+            Some("1")
+        );
+        assert!(crate::utils::env_utils::is_env_truthy(
+            crate::utils::process_env::var("CLAUDE_CODE_ACCESSIBILITY").as_deref()
         ));
     }
 

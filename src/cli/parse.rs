@@ -199,6 +199,7 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            "--ax-screen-reader" => config.ax_screen_reader = true,
             "--enable-auto-mode" => config.enable_auto_mode = true,
             "--prompt-suggestions" => {
                 // Optional value with official choices "true"/"false". Only
@@ -690,6 +691,13 @@ mod tests {
         ]));
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
+        assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_ax_screen_reader_is_live() {
+        let config = parse_cli_config(&argv(&["--ax-screen-reader"]));
+        assert!(config.ax_screen_reader);
         assert!(config.unimplemented_reasons().is_empty());
     }
 
