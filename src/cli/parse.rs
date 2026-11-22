@@ -199,6 +199,23 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            "--prompt-suggestions" => {
+                // Optional value with official choices "true"/"false". Only
+                // consume the next token when it is one of them, so a following
+                // positional prompt is never swallowed.
+                config.prompt_suggestions = Some(
+                    match args.get(index + 1).map(String::as_str) {
+                        Some(value @ ("true" | "false")) => {
+                            index += 1;
+                            value.to_string()
+                        }
+                        _ => "true".to_string(),
+                    },
+                );
+            }
+            other if other.starts_with("--prompt-suggestions=") => {
+                config.prompt_suggestions = strip_eq("--prompt-suggestions", other);
+            }
             "--brief" => config.brief = true,
             other if other.starts_with("--advisor") => {
                 config.advisor_model =
@@ -673,6 +690,24 @@ mod tests {
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
         assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_prompt_suggestions_optional_value() {
+        let bare = parse_cli_config(&argv(&["--prompt-suggestions"]));
+        assert_eq!(bare.prompt_suggestions.as_deref(), Some("true"));
+        assert!(bare.unimplemented_reasons().is_empty());
+
+        let disabled = parse_cli_config(&argv(&["--prompt-suggestions", "false"]));
+        assert_eq!(disabled.prompt_suggestions.as_deref(), Some("false"));
+
+        let inline = parse_cli_config(&argv(&["--prompt-suggestions=false"]));
+        assert_eq!(inline.prompt_suggestions.as_deref(), Some("false"));
+
+        // A positional prompt must not be consumed as the value.
+        let with_prompt = parse_cli_config(&argv(&["--prompt-suggestions", "explain this"]));
+        assert_eq!(with_prompt.prompt_suggestions.as_deref(), Some("true"));
+        assert_eq!(with_prompt.prompt.as_deref(), Some("explain this"));
     }
 
     #[test]

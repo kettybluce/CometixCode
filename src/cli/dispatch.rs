@@ -8,6 +8,13 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     if config.bare {
         crate::utils::process_env::set("CLAUDE_CODE_SIMPLE", "1");
     }
+    // `--prompt-suggestions [value]` maps to the same
+    // `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION` env channel that
+    // `should_enable_prompt_suggestion_with_snapshots` reads (truthy wins,
+    // defined-falsy disables).
+    if let Some(value) = &config.prompt_suggestions {
+        crate::utils::process_env::set("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION", value);
+    }
     // `--brief` maps to CC's `maybeActivateBrief()` at startup; set the opt-in
     // flag directly because USER_MSG_OPT_IN is seeded once from the env var.
     if config.brief {
@@ -131,6 +138,25 @@ mod tests {
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
         ));
+    }
+
+    #[test]
+    fn dispatch_prompt_suggestions_sets_env_and_continues() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::unset("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION");
+        let c = parse_cli_config(&argv(&["--prompt-suggestions", "false"]));
+        assert_eq!(dispatch(&c), None);
+        assert_eq!(
+            crate::utils::process_env::var("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION").as_deref(),
+            Some("false")
+        );
+
+        let c = parse_cli_config(&argv(&["--prompt-suggestions"]));
+        assert_eq!(dispatch(&c), None);
+        assert_eq!(
+            crate::utils::process_env::var("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION").as_deref(),
+            Some("true")
+        );
     }
 
     #[test]

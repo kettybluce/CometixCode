@@ -87,7 +87,7 @@
 | `-n`, `--name` | 会话显示名、resume 名称和终端标题 | 缺失 |
 | `--permission-prompts host\|none` | headless prompt 的回答者策略 | 缺失 |
 | `--plugin-url <url>` | 本次会话下载 zip plugin | 缺失 |
-| `--prompt-suggestions [value]` | stream-json 输出预测的下一条 prompt | 缺失/开关关闭 |
+| `--prompt-suggestions [value]` | stream-json 输出预测的下一条 prompt | 已实现：接受可选 `true`/`false`（非法/缺失值默认 `true`，且不吞掉位置 prompt），写入 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION`，复用既有 `should_enable_prompt_suggestion_with_snapshots` 与 stream-json 输出。有 parser 与 dispatch 单测；真实生成链未在本机验收 |
 | `--ref <branch>` | cloud environment 的基准分支 | 缺失 |
 | `--remote-control [name]` / `--rc` | 启动 Remote Control | 缺失 |
 | `--remote-control-session-name-prefix` | Remote Control 自动会话名前缀 | 缺失 |

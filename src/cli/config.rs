@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `--prompt-suggestions [value]` (optional boolean value).
+    pub prompt_suggestions: Option<String>,
     /// Maps to CC `--brief`: enable the SendUserMessage (BriefTool) capability.
     pub brief: bool,
     /// Maps to CC `--advisor <model>` (advisor model for this session).
@@ -315,6 +317,7 @@ Live:
       --verbose              Verbose mode
       --bare                 Minimal/simple mode (CLAUDE_CODE_SIMPLE)
       --brief                Enable SendUserMessage (BriefTool) capability
+      --prompt-suggestions [true|false]  Enable predicted next-prompt suggestions
       --model <model>        Session model (or `default`)
       --advisor <model>      Override the advisor model for this session
       --effort <level>       Effort: low|medium|high|xhigh|max
