@@ -400,6 +400,24 @@ pub fn is_bypass_permissions_mode_disabled() -> bool {
         == Some("disable")
 }
 
+/// Maps to CC `main.tsx:2630-2634` CLI bypass-availability gate.
+///
+/// Both `--dangerously-skip-permissions` (which also selects bypass as the
+/// initial mode) and `--allow-dangerously-skip-permissions` (which only adds
+/// it to the Shift+Tab cycle) make bypass available. Honors the org/settings
+/// disable gate so the cycle never offers a mode the policy forbids.
+pub fn set_bypass_permissions_mode_available_from_cli(
+    context: &mut ToolPermissionContext,
+    dangerously_skip_permissions: bool,
+    allow_dangerously_skip_permissions: bool,
+) {
+    if (dangerously_skip_permissions || allow_dangerously_skip_permissions)
+        && !is_bypass_permissions_mode_disabled()
+    {
+        context.is_bypass_permissions_mode_available = true;
+    }
+}
+
 /// Maps to CC `permissionSetup.ts#createDisabledBypassPermissionsContext(...)`.
 pub fn create_disabled_bypass_permissions_context(
     current_context: &ToolPermissionContext,
@@ -1622,6 +1640,32 @@ mod tests {
         let disabled = create_disabled_bypass_permissions_context(&context);
         assert_eq!(disabled.mode, PermissionMode::Default);
         assert!(!disabled.is_bypass_permissions_mode_available);
+    }
+
+    #[test]
+    fn cli_bypass_flags_set_availability_without_changing_mode() {
+        let _lock = crate::utils::test_env::TEST_ENV_LOCK.lock().unwrap();
+        let gate_allows = !is_bypass_permissions_mode_disabled();
+
+        // Neither flag: availability stays as-is.
+        let mut context = ToolPermissionContext::default();
+        set_bypass_permissions_mode_available_from_cli(&mut context, false, false);
+        assert!(!context.is_bypass_permissions_mode_available);
+        assert_eq!(context.mode, PermissionMode::Default);
+
+        // --allow-dangerously-skip-permissions: available (unless the org
+        // disabled it), but never selected as the initial mode.
+        let mut context = ToolPermissionContext::default();
+        set_bypass_permissions_mode_available_from_cli(&mut context, false, true);
+        assert_eq!(context.is_bypass_permissions_mode_available, gate_allows);
+        assert_eq!(context.mode, PermissionMode::Default);
+
+        // --dangerously-skip-permissions: also available (mode selection is
+        // owned by initial_permission_mode_from_cli, verified separately).
+        let mut context = ToolPermissionContext::default();
+        set_bypass_permissions_mode_available_from_cli(&mut context, true, false);
+        assert_eq!(context.is_bypass_permissions_mode_available, gate_allows);
+        assert_eq!(context.mode, PermissionMode::Default);
     }
 }
 

@@ -65,6 +65,9 @@ pub struct CliConfig {
     // --- Permissions ---
     pub permission_mode: Option<String>,
     pub dangerously_skip_permissions: bool,
+    /// Maps to CC `--allow-dangerously-skip-permissions`: add bypass mode to
+    /// the interactive cycle without enabling it at startup.
+    pub allow_dangerously_skip_permissions: bool,
     pub allowed_tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
     /// Maps to CC `--tools`: explicit model-facing built-in tool subset.
@@ -320,6 +323,7 @@ Live:
       --permission-mode <m>  default|acceptEdits|plan|bypassPermissions|…
       --permission-prompt-tool=stdio  SDK can_use_tool control bridge
       --dangerously-skip-permissions
+      --allow-dangerously-skip-permissions  Add bypass to the mode cycle only
       --allowedTools / --disallowedTools / --tools
       --disable-slash-commands  Disable all slash commands
       --system-prompt[-file] / --append-system-prompt[-file]

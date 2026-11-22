@@ -63,7 +63,7 @@
 | 参数 | 官方行为 | 当前状态 |
 |---|---|---|
 | `--advisor <model>` | 启用 advisor 模型 | 缺失 |
-| `--allow-dangerously-skip-permissions` | 将 bypassPermissions 加入交互模式循环，但不立即启用 | 缺失 |
+| `--allow-dangerously-skip-permissions` | 将 bypassPermissions 加入交互模式循环，但不立即启用 | 已实现：解析为独立 flag，启动时经 `set_bypass_permissions_mode_available_from_cli` 仅设置 `is_bypass_permissions_mode_available`，不切换初始 mode；遵守组织/设置禁用门。有 parser 与 availability 单测；Shift+Tab 循环行为由既有 `get_next_permission_mode` 覆盖 |
 | `--append-subagent-system-prompt` | 为所有子 agent 追加 prompt | 缺失 |
 | `--append-subagent-system-prompt-file` | 从文件追加子 agent prompt | 缺失 |
 | `--autocompact <auto\|tokens>` | 设置本次会话 auto-compact window | 缺失 |

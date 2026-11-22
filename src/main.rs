@@ -414,11 +414,11 @@ fn build_initial_app_state_with_thinking(
         }
     }
 
-    if cli.dangerously_skip_permissions
-        && !crate::utils::permissions::permission_setup::is_bypass_permissions_mode_disabled()
-    {
-        permission_ctx.is_bypass_permissions_mode_available = true;
-    }
+    crate::utils::permissions::permission_setup::set_bypass_permissions_mode_available_from_cli(
+        &mut permission_ctx,
+        cli.dangerously_skip_permissions,
+        cli.allow_dangerously_skip_permissions,
+    );
     // CC main.tsx:2630-2634: warnings are stderr output, not model context or
     // notifications. Fatal initialization errors returned above stop startup.
     for warning in init_result.warnings {

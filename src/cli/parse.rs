@@ -149,6 +149,9 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
             "--fork-session" => config.fork_session = true,
             "--no-session-persistence" => config.session_persistence = Some(false),
             "--dangerously-skip-permissions" => config.dangerously_skip_permissions = true,
+            "--allow-dangerously-skip-permissions" => {
+                config.allow_dangerously_skip_permissions = true;
+            }
             "--disable-slash-commands" => config.disable_slash_commands = true,
             "--plan-mode-required" => config.plan_mode_required = true,
             "--mcp-debug" => config.mcp_debug = true,
@@ -664,6 +667,14 @@ mod tests {
         ]));
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
+        assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_allow_dangerously_skip_permissions_is_live() {
+        let config = parse_cli_config(&argv(&["--allow-dangerously-skip-permissions"]));
+        assert!(config.allow_dangerously_skip_permissions);
+        assert!(!config.dangerously_skip_permissions);
         assert!(config.unimplemented_reasons().is_empty());
     }
 
