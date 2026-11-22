@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `--permission-prompts <host|none>` (headless answerer policy).
+    pub permission_prompts: Option<String>,
     /// Maps to CC `--autocompact <auto|tokens>` (session compact window).
     pub autocompact: Option<String>,
     /// Maps to CC `--include-hook-events` (stream-json hook lifecycle events).
@@ -342,6 +344,7 @@ Live:
       --max-turns / --max-budget-usd / --task-budget  Headless limits
       --fallback-model <model>  API fallback model for overloaded requests
       --permission-mode <m>  default|acceptEdits|plan|bypassPermissions|…
+      --permission-prompts <host|none>  Headless prompt answerer policy
       --permission-prompt-tool=stdio  SDK can_use_tool control bridge
       --dangerously-skip-permissions
       --allow-dangerously-skip-permissions  Add bypass to the mode cycle only

@@ -151,8 +151,16 @@ pub fn run(config: &CliConfig) -> i32 {
     if !matches!(format.as_str(), "text" | "json" | "stream-json") {
         return fail(&format!("unsupported output format `{format}`"));
     }
+    // `--permission-prompts host` is the explicit form of enabling the SDK
+    // stdio permission bridge; `none` forces deny-all prompts (the default
+    // resolver-absent path). Both map onto the existing resolver choice.
+    let permission_host = config.permission_prompts.as_deref() == Some("host")
+        || config.permission_prompt_tool.as_deref() == Some("stdio");
     if config.permission_prompt_tool.is_some() && format != "stream-json" {
         return fail("--permission-prompt-tool requires output-format=stream-json");
+    }
+    if config.permission_prompts.as_deref() == Some("host") && format != "stream-json" {
+        return fail("--permission-prompts host requires output-format=stream-json");
     }
     if config
         .permission_prompt_tool
@@ -408,7 +416,9 @@ async fn run_stream_json(
     };
 
     let sdk_control = SdkControlBridge::default();
-    let permission_resolver = if config.permission_prompt_tool.as_deref() == Some("stdio") {
+    let permission_host = config.permission_prompts.as_deref() == Some("host")
+        || config.permission_prompt_tool.as_deref() == Some("stdio");
+    let permission_resolver = if permission_host {
         let bridge = sdk_control.clone();
         Some(std::sync::Arc::new(
             move |request, abort, agent_id: Option<String>, app_store: crate::tool::AppStoreRef| {

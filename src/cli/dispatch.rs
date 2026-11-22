@@ -66,6 +66,14 @@ fn validate_cli_values(config: &CliConfig) -> Result<(), String> {
         crate::services::compact::auto_compact::parse_autocompact_value(raw)
             .map_err(|error| error.to_string())?;
     }
+    if let Some(target) = &config.permission_prompts
+        && target != "host"
+        && target != "none"
+    {
+        return Err(format!(
+            "error: option '--permission-prompts <target>' argument '{target}' is invalid. Allowed choices are host, none."
+        ));
+    }
     Ok(())
 }
 
@@ -181,6 +189,20 @@ mod tests {
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
         ));
+    }
+
+    #[test]
+    fn dispatch_permission_prompts_validates_choices() {
+        let host = parse_cli_config(&argv(&["--permission-prompts", "host"]));
+        assert_eq!(dispatch(&host), None);
+        let none = parse_cli_config(&argv(&["--permission-prompts", "none"]));
+        assert_eq!(dispatch(&none), None);
+
+        // Case-sensitive; invalid values hard-fail even with --version.
+        let bad = parse_cli_config(&argv(&["--permission-prompts", "HOST", "--version"]));
+        assert_eq!(dispatch(&bad), Some(1));
+        let bogus = parse_cli_config(&argv(&["--permission-prompts", "bogus"]));
+        assert_eq!(dispatch(&bogus), Some(1));
     }
 
     #[test]

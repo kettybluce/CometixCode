@@ -199,6 +199,10 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            other if other.starts_with("--permission-prompts") => {
+                config.permission_prompts =
+                    strip_eq("--permission-prompts", other).or_else(|| take_value(&args, &mut index));
+            }
             other if other.starts_with("--autocompact") => {
                 config.autocompact =
                     strip_eq("--autocompact", other).or_else(|| take_value(&args, &mut index));
@@ -697,6 +701,16 @@ mod tests {
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
         assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_permission_prompts_flag() {
+        let host = parse_cli_config(&argv(&["--permission-prompts", "host"]));
+        assert_eq!(host.permission_prompts.as_deref(), Some("host"));
+        assert!(host.unimplemented_reasons().is_empty());
+
+        let none = parse_cli_config(&argv(&["--permission-prompts=none"]));
+        assert_eq!(none.permission_prompts.as_deref(), Some("none"));
     }
 
     #[test]
