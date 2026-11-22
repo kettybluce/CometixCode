@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `--include-hook-events` (stream-json hook lifecycle events).
+    pub include_hook_events: bool,
     /// Maps to CC `--ax-screen-reader` (flat, animation-free screen-reader output).
     pub ax_screen_reader: bool,
     /// Maps to CC `--enable-auto-mode` (CLI opt-in for auto mode).
@@ -320,6 +322,7 @@ Live:
       --debug-file <path>    Debug log file (implies debug)
       --verbose              Verbose mode
       --bare                 Minimal/simple mode (CLAUDE_CODE_SIMPLE)
+      --include-hook-events  Emit all hook lifecycle events (stream-json)
       --brief                Enable SendUserMessage (BriefTool) capability
       --ax-screen-reader     Flat, animation-free screen-reader output
       --enable-auto-mode     CLI opt-in for auto mode

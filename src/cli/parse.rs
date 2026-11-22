@@ -199,6 +199,7 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            "--include-hook-events" => config.include_hook_events = true,
             "--ax-screen-reader" => config.ax_screen_reader = true,
             "--enable-auto-mode" => config.enable_auto_mode = true,
             "--prompt-suggestions" => {
@@ -691,6 +692,13 @@ mod tests {
         ]));
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
+        assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_include_hook_events_is_live_and_implies_print_context() {
+        let config = parse_cli_config(&argv(&["--include-hook-events"]));
+        assert!(config.include_hook_events);
         assert!(config.unimplemented_reasons().is_empty());
     }
 

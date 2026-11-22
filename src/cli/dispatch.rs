@@ -8,6 +8,12 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     if config.bare {
         crate::utils::process_env::set("CLAUDE_CODE_SIMPLE", "1");
     }
+    // `--include-hook-events` enables every known hook lifecycle event for the
+    // stream-json output. The handler registration/output path is owned by
+    // `utils/hooks/hook_events`.
+    if config.include_hook_events {
+        crate::utils::hooks::hook_events::set_all_hook_events_enabled(true);
+    }
     // `--ax-screen-reader` maps to CC's accessibility mode: flat text, no
     // decorative borders or animations. The existing render path reads
     // `CLAUDE_CODE_ACCESSIBILITY` (TextInput cursor gate, etc.).
@@ -150,6 +156,16 @@ mod tests {
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
         ));
+    }
+
+    #[test]
+    fn dispatch_include_hook_events_enables_all_hook_events_and_continues() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        crate::utils::hooks::hook_events::clear_hook_event_state();
+        let c = parse_cli_config(&argv(&["--include-hook-events"]));
+        assert_eq!(dispatch(&c), None);
+        assert!(crate::utils::hooks::hook_events::should_emit_hook_event("PreToolUse"));
+        crate::utils::hooks::hook_events::clear_hook_event_state();
     }
 
     #[test]

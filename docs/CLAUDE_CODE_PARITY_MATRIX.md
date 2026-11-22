@@ -82,7 +82,7 @@
 | `--file <file_id:path...>` | 启动时下载文件 | 缺失 |
 | `--forward-subagent-text` | stream-json 转发子 agent 文本/思考块 | 缺失 |
 | `--ide` | 启动时连接唯一 IDE | 缺失 |
-| `--include-hook-events` | stream-json 输出 hook 生命周期事件 | 缺失 |
+| `--include-hook-events` | stream-json 输出 hook 生命周期事件 | 已实现：解析后在 dispatch 调用 `set_all_hook_events_enabled(true)`，`should_emit_hook_event` 据此放行全部已知 hook 事件，复用既有 hook 事件总线与 stream-json 输出。有 parser 与 dispatch 单测 |
 | `--metadata key=value` | 给 self-hosted orchestrator 的会话 metadata | 缺失 |
 | `-n`, `--name` | 会话显示名、resume 名称和终端标题 | 缺失 |
 | `--permission-prompts host\|none` | headless prompt 的回答者策略 | 缺失 |
