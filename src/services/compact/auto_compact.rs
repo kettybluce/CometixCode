@@ -19,6 +19,63 @@ pub const ERROR_THRESHOLD_BUFFER_TOKENS: i64 = 20_000;
 pub const MANUAL_COMPACT_BUFFER_TOKENS: i64 = 3_000;
 pub const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES: u32 = 3;
 
+/// Min/max accepted auto-compact window, in tokens.
+pub const AUTOCOMPACT_MIN_TOKENS: i64 = 100_000;
+pub const AUTOCOMPACT_MAX_TOKENS: i64 = 1_000_000;
+
+/// Parse the official `--autocompact <auto|tokens>` value into the token count
+/// written to `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. `auto` returns `None` (no
+/// override). Accepts `Nk`/`NM` (case-insensitive), a bare shorthand `N`
+/// meaning `N * 1000` (100..=1000), and a literal token count (100000..=1000000).
+/// Maps to CC `cli.tsx` `--autocompact` argument coercion.
+pub fn parse_autocompact_value(raw: &str) -> anyhow::Result<Option<i64>> {
+    let value = raw.trim();
+    if value.eq_ignore_ascii_case("auto") {
+        return Ok(None);
+    }
+    if value.is_empty() {
+        anyhow::bail!("{}", autocompact_invalid_error(raw));
+    }
+    let lower = value.to_ascii_lowercase();
+    let tokens = if let Some(num) = lower.strip_suffix('m') {
+        let factor: f64 = num
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{}", autocompact_invalid_error(raw)))?;
+        if !(0.1..=1.0).contains(&factor) {
+            anyhow::bail!("{}", autocompact_invalid_error(raw));
+        }
+        (factor * 1_000_000.0).round() as i64
+    } else if let Some(num) = lower.strip_suffix('k') {
+        let n: i64 = num
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{}", autocompact_invalid_error(raw)))?;
+        if !(100..=1000).contains(&n) {
+            anyhow::bail!("{}", autocompact_invalid_error(raw));
+        }
+        n * 1_000
+    } else {
+        let n: i64 = value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{}", autocompact_invalid_error(raw)))?;
+        // A small bare number is the documented shorthand (200 => 200k).
+        if (100..=1000).contains(&n) {
+            n * 1_000
+        } else {
+            n
+        }
+    };
+    if !(AUTOCOMPACT_MIN_TOKENS..=AUTOCOMPACT_MAX_TOKENS).contains(&tokens) {
+        anyhow::bail!("{}", autocompact_invalid_error(raw));
+    }
+    Ok(Some(tokens))
+}
+
+fn autocompact_invalid_error(raw: &str) -> String {
+    format!(
+        "error: option '--autocompact <auto|tokens>' argument '{raw}' is invalid. It must be 'auto', or between 100k and 1M (e.g. 500k, 200000, or 200 as shorthand)"
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenWarningState {
     pub percent_left: i64,
@@ -298,6 +355,32 @@ mod tests {
         crate::utils::process_env::remove("COMETIX_CONTEXT_COLLAPSE");
         crate::utils::process_env::remove("CLAUDE_CODE_CONTEXT_COLLAPSE");
         crate::utils::process_env::remove("CLAUDE_CONTEXT_COLLAPSE");
+    }
+
+    #[test]
+    fn autocompact_value_parsing_matches_official_coercion() {
+        // `auto` disables the override.
+        assert_eq!(parse_autocompact_value("auto").unwrap(), None);
+        assert_eq!(parse_autocompact_value("AUTO").unwrap(), None);
+        // k / M suffixes (case-insensitive).
+        assert_eq!(parse_autocompact_value("100k").unwrap(), Some(100_000));
+        assert_eq!(parse_autocompact_value("500K").unwrap(), Some(500_000));
+        assert_eq!(parse_autocompact_value("1M").unwrap(), Some(1_000_000));
+        assert_eq!(parse_autocompact_value("1m").unwrap(), Some(1_000_000));
+        assert_eq!(parse_autocompact_value("0.5M").unwrap(), Some(500_000));
+        // Bare shorthand 100..=1000 multiplies by 1000.
+        assert_eq!(parse_autocompact_value("200").unwrap(), Some(200_000));
+        assert_eq!(parse_autocompact_value("1000").unwrap(), Some(1_000_000));
+        // Literal token counts.
+        assert_eq!(parse_autocompact_value("150000").unwrap(), Some(150_000));
+        assert_eq!(parse_autocompact_value("1000000").unwrap(), Some(1_000_000));
+        // Out-of-range / malformed values are rejected with the official error.
+        for invalid in [
+            "bogus", "99k", "2M", "50k", "0", "-1", "1.5M", "99", "1001", "1000001", "2000000",
+        ] {
+            let error = parse_autocompact_value(invalid).unwrap_err().to_string();
+            assert!(error.contains("100k and 1M"), "{invalid}: {error}");
+        }
     }
 
     #[test]

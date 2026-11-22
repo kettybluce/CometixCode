@@ -199,6 +199,10 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            other if other.starts_with("--autocompact") => {
+                config.autocompact =
+                    strip_eq("--autocompact", other).or_else(|| take_value(&args, &mut index));
+            }
             "--include-hook-events" => config.include_hook_events = true,
             "--ax-screen-reader" => config.ax_screen_reader = true,
             "--enable-auto-mode" => config.enable_auto_mode = true,
@@ -693,6 +697,16 @@ mod tests {
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
         assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_autocompact_flag() {
+        let config = parse_cli_config(&argv(&["--autocompact", "500k"]));
+        assert_eq!(config.autocompact.as_deref(), Some("500k"));
+        assert!(config.unimplemented_reasons().is_empty());
+
+        let inline = parse_cli_config(&argv(&["--autocompact=auto"]));
+        assert_eq!(inline.autocompact.as_deref(), Some("auto"));
     }
 
     #[test]

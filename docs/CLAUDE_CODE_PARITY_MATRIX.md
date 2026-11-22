@@ -66,7 +66,7 @@
 | `--allow-dangerously-skip-permissions` | 将 bypassPermissions 加入交互模式循环，但不立即启用 | 已实现：解析为独立 flag，启动时经 `set_bypass_permissions_mode_available_from_cli` 仅设置 `is_bypass_permissions_mode_available`，不切换初始 mode；遵守组织/设置禁用门。有 parser 与 availability 单测；Shift+Tab 循环行为由既有 `get_next_permission_mode` 覆盖 |
 | `--append-subagent-system-prompt` | 为所有子 agent 追加 prompt | 缺失 |
 | `--append-subagent-system-prompt-file` | 从文件追加子 agent prompt | 缺失 |
-| `--autocompact <auto\|tokens>` | 设置本次会话 auto-compact window | 缺失 |
+| `--autocompact <auto\|tokens>` | 设置本次会话 auto-compact window | 已实现：解析 `--autocompact`/`--autocompact=` 并按官方规则校验（`auto`、`Nk`/`NM`、100–1000 裸数 shorthand、100000–1000000 字面量，范围 100k–1M），非法值在任何启动路径前 exit 1（含 `--version`）；合法值写入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，由 `get_effective_context_window_size` 读取。有 parser、值域解析与 dispatch 单测 |
 | `--ax-screen-reader` | 无边框、无动画的屏幕阅读器输出 | 已实现：解析后在 dispatch 设置 `CLAUDE_CODE_ACCESSIBILITY=1`，复用既有 TextInput 无障碍渲染门禁。有 parser 与 dispatch 单测；完整扁平化/去动画渲染仍由现有 accessibility 渲染路径承担，未做像素级验收 |
 | `--betas <betas...>` | API key 请求 beta headers | 已实现：variadic 解析（含 `--betas=` 形式）→ `ANTHROPIC_BETAS` 逗号拼接 + 缓存失效；`utils/betas.rs` 的 `get_all_model_betas` 已读取该变量。有 parser 与 dispatch 测试；真实 API 请求头未在本机抓包验收 |
 | `--brief` | 启用 SendUserMessage/brief 能力 | 已实现：解析 `--brief` 后在 dispatch 设置 `CLAUDE_CODE_BRIEF=1` 并直接置位 `USER_MSG_OPT_IN`，复用既有 BriefTool/brief system prompt 能力。有 parser 与 dispatch 单测 |

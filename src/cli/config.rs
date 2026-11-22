@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `--autocompact <auto|tokens>` (session compact window).
+    pub autocompact: Option<String>,
     /// Maps to CC `--include-hook-events` (stream-json hook lifecycle events).
     pub include_hook_events: bool,
     /// Maps to CC `--ax-screen-reader` (flat, animation-free screen-reader output).
@@ -326,6 +328,7 @@ Live:
       --brief                Enable SendUserMessage (BriefTool) capability
       --ax-screen-reader     Flat, animation-free screen-reader output
       --enable-auto-mode     CLI opt-in for auto mode
+      --autocompact <auto|tokens>  Compact window (auto, or 100k-1M tokens)
       --prompt-suggestions [true|false]  Enable predicted next-prompt suggestions
       --model <model>        Session model (or `default`)
       --advisor <model>      Override the advisor model for this session

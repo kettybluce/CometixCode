@@ -46,6 +46,27 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
         crate::utils::process_env::set("ANTHROPIC_BETAS", &config.betas.join(","));
         crate::utils::betas::clear_betas_caches();
     }
+    // `--autocompact` writes the parsed window to the env channel read by
+    // `get_effective_context_window_size`; `auto` clears any override.
+    if let Some(raw) = &config.autocompact
+        && let Ok(Some(tokens)) =
+            crate::services::compact::auto_compact::parse_autocompact_value(raw)
+    {
+        crate::utils::process_env::set(
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            &tokens.to_string(),
+        );
+    }
+}
+
+/// Validate options that must hard-fail before any launch path (matching
+/// commander's argument coercion). Returns an error message on invalid input.
+fn validate_cli_values(config: &CliConfig) -> Result<(), String> {
+    if let Some(raw) = &config.autocompact {
+        crate::services::compact::auto_compact::parse_autocompact_value(raw)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// Short-circuit Unimplemented reasons to stderr; returns exit code `1`.
@@ -65,6 +86,10 @@ pub fn exit_unimplemented(reasons: &[String]) -> i32 {
 /// Returns `Some(exit_code)` when the process should exit without interactive
 /// [`crate::main::run`]. Returns `None` to continue into interactive launch.
 pub fn dispatch(config: &CliConfig) -> Option<i32> {
+    if let Err(message) = validate_cli_values(config) {
+        eprintln!("{message}");
+        return Some(1);
+    }
     apply_live_env_side_effects(config);
 
     if config.show_version {
@@ -156,6 +181,22 @@ mod tests {
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
         ));
+    }
+
+    #[test]
+    fn dispatch_autocompact_sets_env_and_rejects_invalid() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::unset("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+        let c = parse_cli_config(&argv(&["--autocompact", "500k"]));
+        assert_eq!(dispatch(&c), None);
+        assert_eq!(
+            crate::utils::process_env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW").as_deref(),
+            Some("500000")
+        );
+
+        // Invalid values hard-fail before any launch path, even with --version.
+        let bad = parse_cli_config(&argv(&["--autocompact", "bogus", "--version"]));
+        assert_eq!(dispatch(&bad), Some(1));
     }
 
     #[test]
