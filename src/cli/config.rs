@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `--advisor <model>` (advisor model for this session).
+    pub advisor_model: Option<String>,
     pub thinking: Option<String>,
     pub effort: Option<String>,
     pub max_thinking_tokens: Option<String>,
@@ -311,6 +313,7 @@ Live:
       --verbose              Verbose mode
       --bare                 Minimal/simple mode (CLAUDE_CODE_SIMPLE)
       --model <model>        Session model (or `default`)
+      --advisor <model>      Override the advisor model for this session
       --effort <level>       Effort: low|medium|high|xhigh|max
       --thinking <mode>      adaptive|enabled|disabled
       --mcp-debug            Deprecated alias for debug logging

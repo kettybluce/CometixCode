@@ -321,7 +321,10 @@ fn build_initial_app_state_with_thinking(
     // Maps to CC `main.tsx` initial AppState projection through
     // `getInitialAdvisorSetting()`. The feature gate intentionally keeps this
     // unset for ordinary external builds.
-    initial.advisor_model = crate::utils::advisor::get_initial_advisor_setting();
+    initial.advisor_model = crate::utils::advisor::advisor_model_from_cli(
+        cli.advisor_model.as_deref(),
+    )
+    .or_else(|| crate::utils::advisor::get_initial_advisor_setting());
 
     // Maps to CC main.tsx:4153 initialState assembly.
     initial.fast_mode = crate::utils::fast_mode::get_initial_fast_mode_setting(

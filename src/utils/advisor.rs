@@ -66,6 +66,17 @@ pub fn is_valid_advisor_model(model: &str) -> bool {
     model_supports_advisor(model)
 }
 
+/// Maps to CC `main.tsx` `--advisor <model>` projection into the initial
+/// `AppState.advisorModel`. An explicit CLI value takes precedence over the
+/// settings/experiment-derived one; validation stays in the `/advisor` command
+/// (`utils/advisor.ts#isValidAdvisorModel` gate), matching the source split.
+pub fn advisor_model_from_cli(cli_model: Option<&str>) -> Option<String> {
+    cli_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
 /// Maps to CC `getInitialAdvisorSetting()` (`utils/advisor.ts:108-113`).
 pub fn get_initial_advisor_setting() -> Option<String> {
     is_advisor_enabled()
@@ -77,6 +88,16 @@ pub fn get_initial_advisor_setting() -> Option<String> {
 mod tests {
     use super::*;
     use crate::utils::test_env::{EnvVarGuard, TEST_ENV_LOCK};
+
+    #[test]
+    fn advisor_model_from_cli_trims_and_ignores_empty() {
+        assert_eq!(
+            advisor_model_from_cli(Some("  claude-opus-4-6  ")).as_deref(),
+            Some("claude-opus-4-6")
+        );
+        assert_eq!(advisor_model_from_cli(Some("   ")), None);
+        assert_eq!(advisor_model_from_cli(None), None);
+    }
 
     #[test]
     fn advisor_model_predicates_match_official_launch_allowlist() {

@@ -199,6 +199,10 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            other if other.starts_with("--advisor") => {
+                config.advisor_model =
+                    strip_eq("--advisor", other).or_else(|| take_value(&args, &mut index));
+            }
             other if other.starts_with("--model") => {
                 config.model = strip_eq("--model", other).or_else(|| take_value(&args, &mut index));
             }
@@ -668,6 +672,16 @@ mod tests {
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
         assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_advisor_model_flag() {
+        let config = parse_cli_config(&argv(&["--advisor", "claude-opus-4-6"]));
+        assert_eq!(config.advisor_model.as_deref(), Some("claude-opus-4-6"));
+        assert!(config.unimplemented_reasons().is_empty());
+
+        let inline = parse_cli_config(&argv(&["--advisor=claude-sonnet-4-6"]));
+        assert_eq!(inline.advisor_model.as_deref(), Some("claude-sonnet-4-6"));
     }
 
     #[test]
