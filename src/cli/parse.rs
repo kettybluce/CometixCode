@@ -199,6 +199,15 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
+            other if other == "-n" || other == "--name" => {
+                config.session_name = take_value(&args, &mut index);
+            }
+            other if other.starts_with("--name=") => {
+                config.session_name = strip_eq("--name", other);
+            }
+            other if other.starts_with("-n") && other.len() > 2 => {
+                config.session_name = Some(other[2..].to_string());
+            }
             other if other.starts_with("--permission-prompts") => {
                 config.permission_prompts =
                     strip_eq("--permission-prompts", other).or_else(|| take_value(&args, &mut index));
@@ -701,6 +710,22 @@ mod tests {
         assert_eq!(config.mcp_config, vec!["one.json", "{\"mcpServers\":{}}"]);
         assert!(config.strict_mcp_config);
         assert!(config.unimplemented_reasons().is_empty());
+    }
+
+    #[test]
+    fn parse_session_name_flag() {
+        let long = parse_cli_config(&argv(&["--name", "my session"]));
+        assert_eq!(long.session_name.as_deref(), Some("my session"));
+        assert!(long.unimplemented_reasons().is_empty());
+
+        let short = parse_cli_config(&argv(&["-n", "reviewer"]));
+        assert_eq!(short.session_name.as_deref(), Some("reviewer"));
+
+        let inline = parse_cli_config(&argv(&["--name=docs"]));
+        assert_eq!(inline.session_name.as_deref(), Some("docs"));
+
+        let short_inline = parse_cli_config(&argv(&["-nshort"]));
+        assert_eq!(short_inline.session_name.as_deref(), Some("short"));
     }
 
     #[test]

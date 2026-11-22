@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `-n, --name <name>` (session display name).
+    pub session_name: Option<String>,
     /// Maps to CC `--permission-prompts <host|none>` (headless answerer policy).
     pub permission_prompts: Option<String>,
     /// Maps to CC `--autocompact <auto|tokens>` (session compact window).
@@ -333,6 +335,7 @@ Live:
       --autocompact <auto|tokens>  Compact window (auto, or 100k-1M tokens)
       --prompt-suggestions [true|false]  Enable predicted next-prompt suggestions
       --model <model>        Session model (or `default`)
+  -n, --name <name>          Set a display name for this session
       --advisor <model>      Override the advisor model for this session
       --effort <level>       Effort: low|medium|high|xhigh|max
       --thinking <mode>      adaptive|enabled|disabled

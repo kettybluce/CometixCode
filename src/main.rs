@@ -1503,6 +1503,9 @@ pub fn run(config: crate::cli::CliConfig) {
         eprintln!("{error}");
         utils::cleanup_registry::exit_process(1);
     }
+    // Maps to CC `main.tsx` `-n`/`--name`: apply the launch-time session
+    // display name before any session restore / REPL mount reads it.
+    commands::rename::rename::apply_cli_session_name(config.session_name.as_deref());
     // Maps to CC `main.tsx:1248-1258` preAction barrier. Any wait happens
     // before the render root exists; subsequent auth reads are memory hits.
     utils::secure_storage::keychain_prefetch::ensure_keychain_prefetch_completed();

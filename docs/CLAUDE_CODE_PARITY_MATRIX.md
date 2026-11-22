@@ -84,7 +84,7 @@
 | `--ide` | 启动时连接唯一 IDE | 缺失 |
 | `--include-hook-events` | stream-json 输出 hook 生命周期事件 | 已实现：解析后在 dispatch 调用 `set_all_hook_events_enabled(true)`，`should_emit_hook_event` 据此放行全部已知 hook 事件，复用既有 hook 事件总线与 stream-json 输出。有 parser 与 dispatch 单测 |
 | `--metadata key=value` | 给 self-hosted orchestrator 的会话 metadata | 缺失 |
-| `-n`, `--name` | 会话显示名、resume 名称和终端标题 | 缺失 |
+| `-n`, `--name` | 会话显示名、resume 名称和终端标题 | 已实现：解析 `-n`/`--name`/`--name=`/`-nshort`，启动时经 `apply_cli_session_name` 写入持久化 custom title + agent name（resume 可见）与内存标题缓存（终端标题/prompt bar）；空/空白名忽略。有 parser 与 session-name 应用单测 |
 | `--permission-prompts host\|none` | headless prompt 的回答者策略 | 已实现：解析并校验 `host`/`none`（大小写敏感，非法值含 `--version` 路径都 exit 1，错误文案与官方一致）。`host` 启用 SDK stdio 权限桥（要求 `--output-format=stream-json`），`none` 走无 resolver 的 deny-all 默认路径。有 parser 与 dispatch 单测 |
 | `--plugin-url <url>` | 本次会话下载 zip plugin | 缺失 |
 | `--prompt-suggestions [value]` | stream-json 输出预测的下一条 prompt | 已实现：接受可选 `true`/`false`（非法/缺失值默认 `true`，且不吞掉位置 prompt），写入 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION`，复用既有 `should_enable_prompt_suggestion_with_snapshots` 与 stream-json 输出。有 parser 与 dispatch 单测；真实生成链未在本机验收 |
