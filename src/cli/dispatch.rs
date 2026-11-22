@@ -62,6 +62,13 @@ pub fn dispatch(config: &CliConfig) -> Option<i32> {
         return crate::commands::mcp::maybe_run_mcp_cli(&config.argv);
     }
 
+    // Local diagnostics own their stdout and must run before the generic
+    // subcommand-unimplemented guard. CC's `doctorHandler` is likewise a
+    // standalone CLI path that never opens the interactive TUI.
+    if config.subcommand.as_deref() == Some("doctor") {
+        return crate::commands::doctor::maybe_run_doctor_cli(&config.argv);
+    }
+
     // Preserve historical ant-only / feature-gated messaging where useful,
     // but unify on `Unimplemented:` for incomplete commander surface.
     let reasons = config.unimplemented_reasons();

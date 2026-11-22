@@ -112,7 +112,7 @@
 | `auth` | `login`, `logout`, `status` | 交互命令存在，顶层 CLI 缺失 |
 | `agents` | `--json`, `--all`, `--cwd`、派发默认参数 | agent/task 数据结构有，agent view/JSON shell 入口缺失 |
 | `auto-mode` | `config`, `critique`, `defaults`, `reset` | 缺失 |
-| `doctor` | 安装、settings、Remote Control、OTel 只读诊断 | 交互 `/doctor` 有，顶层 CLI 缺失 |
+| `doctor` | 安装、settings、Remote Control、OTel 只读诊断 | 顶层 CLI 已接入：复用 `utils/doctor_diagnostic` 与交互 `/doctor` 共享的数据模型，打印安装类型/版本/平台/路径/搜索/自动更新/问题清单文本报告，有真实二进制测试。远程策略、OTel、安装修复等需网络或副作用的项目未覆盖 |
 | `gateway` | `--config` 企业 gateway 进程 | 缺失 |
 | `import` | `codex/gemini/cursor`, `--dry-run`, `--yes` | 缺失 |
 | `install` | `stable/latest/version`, `--force` | 缺失 |
@@ -277,7 +277,7 @@ Hook event enum 已覆盖 `SessionStart/Setup/SessionEnd/UserPromptSubmit/PreToo
 
 1. CLI parser/help/dispatch：先补新参数的严格解析、值域和错误边界，避免 typo 被 `starts_with` 静默接受。
 2. MCP shell 子命令：已完成 `list/get/remove/add/login/logout/reset-project-choices/add-json/add-from-claude-desktop`；继续实现 `serve`，每个命令独立测试和提交。
-3. Auth/doctor/auto-mode/install/import/purge 等本地无云依赖命令。
+3. Auth/auto-mode/install/import/purge 等本地无云依赖命令（`doctor` 已完成）。
 4. Plugin shell 管理面和 marketplace 本地操作。
 5. session-id/fork/name、worktree/tmux、background supervisor/agent view。
 6. hooks/structured stream、settings schema、permission/sandbox 完整字段。

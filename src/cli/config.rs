@@ -181,7 +181,9 @@ impl CliConfig {
             ("chrome", ImplStatus::Live),
             (
                 "worktree/tmux/remote/bg/daemon/subcommands",
-                if (self.subcommand.is_some() && !self.is_live_mcp_command())
+                if (self.subcommand.is_some()
+                    && !self.is_live_mcp_command()
+                    && self.subcommand.as_deref() != Some("doctor"))
                     || self.worktree
                     || self.tmux
                     || self.remote
@@ -231,6 +233,7 @@ impl CliConfig {
 
         if let Some(sub) = &self.subcommand
             && !self.is_live_mcp_command()
+            && sub != "doctor"
         {
             reasons.push(sub.clone());
         }
@@ -338,6 +341,7 @@ Live:
       mcp login <name>              Authenticate with an MCP server
       mcp logout <name>             Clear stored MCP OAuth credentials
       mcp add-json <name> <json|->  Add an MCP server; '-' reads JSON from stdin
+      doctor                     Check installation health (text report)
   -p, --print                Headless/print path
       --output-format / --input-format / --json-schema / --stream-json
       --include-partial-messages / --replay-user-messages
@@ -346,7 +350,7 @@ Live:
 
 Unimplemented (parsed, then exit 1):
       --session-id / --fork-session
-      Subcommands: mcp (except add/add-from-claude-desktop/add-json/get/list/login/logout/remove/reset-project-choices), auth, plugin, doctor, update, …
+      Subcommands: mcp (except add/add-from-claude-desktop/add-json/get/list/login/logout/remove/reset-project-choices), auth, plugin, update, …
       --init / --init-only / --maintenance
       --worktree / --tmux / --remote / --bg / daemon
 "
