@@ -270,6 +270,7 @@ impl CliConfig {
             self.mcp_subcommand(),
             Some(
                 "add"
+                    | "add-from-claude-desktop"
                     | "add-json"
                     | "get"
                     | "list"
@@ -341,7 +342,7 @@ Live:
 
 Unimplemented (parsed, then exit 1):
       --session-id / --fork-session
-      Subcommands: mcp (except add/get/list/login/logout/remove/reset-project-choices/add-json), auth, plugin, doctor, update, …
+      Subcommands: mcp (except add/add-from-claude-desktop/add-json/get/list/login/logout/remove/reset-project-choices), auth, plugin, doctor, update, …
       --init / --init-only / --maintenance
       --worktree / --tmux / --remote / --bg / daemon
 "

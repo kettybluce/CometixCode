@@ -55,6 +55,7 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
         match subcommand {
             "add-json" => print_mcp_add_json_help(),
             "add" => print_mcp_add_help(),
+            "add-from-claude-desktop" => print_mcp_add_from_claude_desktop_help(),
             "get" => print_mcp_get_help(),
             "list" => print_mcp_list_help(),
             "login" => print_mcp_login_help(),
@@ -81,6 +82,13 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             }
             Err(error) => {
                 eprintln!("Error: {error}");
+                1
+            }
+        }),
+        "add-from-claude-desktop" => Some(match run_mcp_add_from_claude_desktop_cli(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
                 1
             }
         }),
@@ -175,6 +183,12 @@ Options:
 fn print_mcp_add_json_help() {
     println!(
         "Usage: cometix mcp add-json [options] <name> <json|->\n\nOptions:\n  -s, --scope <scope>  local (default), user, or project\n      --help           Show this help\n\nUse '-' as the JSON argument to read the server configuration from stdin."
+    );
+}
+
+fn print_mcp_add_from_claude_desktop_help() {
+    println!(
+        "Usage: cometix mcp add-from-claude-desktop [options]\n\nImport MCP servers from Claude Desktop (Mac and WSL only)\n\nOptions:\n  -h, --help           Display help for command\n  -s, --scope <scope>  Configuration scope (local, user, or project) (default:\n                       \"local\")"
     );
 }
 
@@ -758,6 +772,199 @@ fn run_mcp_add_json_cli(args: &[String]) -> anyhow::Result<(String, &'static str
     let server = read_mcp_add_json_payload(&payload)?;
     crate::services::mcp::config::add_mcp_server_config(&name, &server, scope)?;
     Ok((name, scope.as_str()))
+}
+
+/// Detect a WSL runtime. CC only supports Desktop import on macOS and WSL;
+/// native Windows and plain Linux must be rejected with the official message.
+fn is_wsl_runtime() -> bool {
+    std::fs::read_to_string("/proc/version")
+        .map(|version| version.to_ascii_lowercase().contains("microsoft"))
+        .unwrap_or(false)
+        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+}
+
+/// Maps to CC `mcpAddFromDesktopHandler`'s WSL path derivation from the
+/// Windows-side `%USERPROFILE%` (e.g. `C:\Users\me` -> `/mnt/c/Users/me`).
+fn wsl_desktop_config_path(user_profile: &str) -> Option<std::path::PathBuf> {
+    let unix = user_profile.replace('\\', "/");
+    let bytes = unix.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let drive = bytes[0].to_ascii_lowercase() as char;
+        Some(std::path::PathBuf::from(format!(
+            "/mnt/{drive}{}/AppData/Roaming/Claude/claude_desktop_config.json",
+            &unix[2..]
+        )))
+    } else {
+        None
+    }
+}
+
+/// Resolve the Claude Desktop config file for the current platform.
+fn claude_desktop_config_path() -> anyhow::Result<std::path::PathBuf> {
+    if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        return Ok(std::path::PathBuf::from(home)
+            .join("Library/Application Support/Claude/claude_desktop_config.json"));
+    }
+    if is_wsl_runtime() {
+        if let Ok(profile) = std::env::var("USERPROFILE")
+            && let Some(path) = wsl_desktop_config_path(&profile)
+            && path.is_file()
+        {
+            return Ok(path);
+        }
+        if let Ok(entries) = std::fs::read_dir("/mnt/c/Users") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if matches!(name.as_ref(), "Public" | "Default" | "Default User" | "All Users") {
+                    continue;
+                }
+                let path = std::path::PathBuf::from(format!(
+                    "/mnt/c/Users/{name}/AppData/Roaming/Claude/claude_desktop_config.json"
+                ));
+                if path.is_file() {
+                    return Ok(path);
+                }
+            }
+        }
+        anyhow::bail!(
+            "Could not find Claude Desktop config file in Windows. Make sure Claude Desktop is installed on Windows."
+        );
+    }
+    anyhow::bail!(
+        "Unsupported platform - Claude Desktop integration only works on macOS and WSL."
+    );
+}
+
+/// Read the `mcpServers` object out of a Claude Desktop config, in a stable
+/// order so the CLI output and collision suffixes are deterministic.
+fn desktop_mcp_servers(config: &Value) -> anyhow::Result<Vec<(String, Value)>> {
+    let Some(servers) = config.get("mcpServers").and_then(Value::as_object) else {
+        anyhow::bail!(
+            "Failed to read existing MCP configs for Desktop import: missing mcpServers object"
+        );
+    };
+    let mut result = servers
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect::<Vec<_>>();
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(result)
+}
+
+/// Import every selected Desktop server, assigning numbered suffixes to
+/// collisions. Reuses the same final-name logic as the interactive dialog.
+fn import_desktop_mcp_servers(
+    servers: &[(String, Value)],
+    existing_names: &[String],
+    scope: crate::services::mcp::types::ConfigScope,
+) -> anyhow::Result<Vec<String>> {
+    use crate::components::mcp_server_desktop_import_dialog::mcp_desktop_import_final_name;
+    let mut occupied = existing_names.to_vec();
+    let mut final_names = Vec::with_capacity(servers.len());
+    for (name, value) in servers {
+        let final_name = mcp_desktop_import_final_name(name, &occupied);
+        crate::services::mcp::config::add_mcp_server_config(&final_name, value, scope)?;
+        occupied.push(final_name.clone());
+        final_names.push(final_name);
+    }
+    Ok(final_names)
+}
+
+fn parse_desktop_import_scope_value(
+    value: &str,
+) -> anyhow::Result<crate::services::mcp::types::ConfigScope> {
+    use crate::services::mcp::types::ConfigScope;
+    match value {
+        "local" => Ok(ConfigScope::Local),
+        "user" => Ok(ConfigScope::User),
+        "project" => Ok(ConfigScope::Project),
+        _ => anyhow::bail!(
+            "error: option '-s, --scope <scope>' argument '{value}' is not one of 'local', 'user', 'project'"
+        ),
+    }
+}
+
+fn parse_desktop_import_scope(
+    args: &[String],
+) -> anyhow::Result<crate::services::mcp::types::ConfigScope> {
+    use crate::services::mcp::types::ConfigScope;
+    let mut scope = ConfigScope::Local;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "-s" || arg == "--scope" {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| anyhow::anyhow!("error: option '-s, --scope <scope>' argument missing"))?;
+            scope = parse_desktop_import_scope_value(value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--scope=").or_else(|| arg.strip_prefix("-s=")) {
+            scope = parse_desktop_import_scope_value(value)?;
+            index += 1;
+            continue;
+        }
+        anyhow::bail!("error: unknown option '{arg}'");
+    }
+    Ok(scope)
+}
+
+fn desktop_import_scope_label(
+    scope: crate::services::mcp::types::ConfigScope,
+) -> crate::components::mcp_server_desktop_import_dialog::McpConfigScope {
+    use crate::components::mcp_server_desktop_import_dialog::McpConfigScope;
+    use crate::services::mcp::types::ConfigScope;
+    match scope {
+        ConfigScope::User => McpConfigScope::User,
+        ConfigScope::Project => McpConfigScope::Project,
+        _ => McpConfigScope::Local,
+    }
+}
+
+/// Maps to CC `mcpAddFromDesktopHandler`. The official shell command opens an
+/// interactive multi-select dialog; the headless CLI path imports the servers
+/// found in Claude Desktop's config directly and reports the result on stdout.
+fn run_mcp_add_from_claude_desktop_cli(args: &[String]) -> anyhow::Result<()> {
+    use crate::components::mcp_server_desktop_import_dialog::mcp_desktop_import_success_message;
+    let scope = parse_desktop_import_scope(args)?;
+    let path = claude_desktop_config_path()?;
+    let text = std::fs::read_to_string(&path).map_err(|error| {
+        anyhow::anyhow!("Failed to read existing MCP configs for Desktop import: {error}")
+    })?;
+    let config: Value = serde_json::from_str(&text).map_err(|error| {
+        anyhow::anyhow!("Failed to read existing MCP configs for Desktop import: {error}")
+    })?;
+    let servers = desktop_mcp_servers(&config)?;
+    if servers.is_empty() {
+        println!("No MCP servers were found in Claude Desktop config.");
+        return Ok(());
+    }
+    let global_config = crate::utils::config::load_global_config();
+    let project_config = crate::utils::config::get_current_project_config();
+    let existing = crate::services::mcp::config::all_configured_mcp_servers_readonly(
+        &global_config,
+        &project_config,
+    )
+    .keys()
+    .cloned()
+    .collect::<Vec<_>>();
+    let final_names = import_desktop_mcp_servers(&servers, &existing, scope)?;
+    println!(
+        "{}",
+        mcp_desktop_import_success_message(
+            final_names.len(),
+            desktop_import_scope_label(scope),
+        )
+    );
+    for ((original, _), final_name) in servers.iter().zip(final_names.iter()) {
+        if original != final_name {
+            println!("Imported '{original}' as '{final_name}' (a server with that name already exists).");
+        }
+    }
+    Ok(())
 }
 
 fn run_mcp_logout_cli(args: &[String]) -> anyhow::Result<()> {
@@ -2162,5 +2369,116 @@ mod tests {
             results.lock().expect("result mutex").as_slice(),
             &["MCP dialog dismissed".to_string()]
         );
+    }
+
+    #[test]
+    fn desktop_import_scope_accepts_official_values_and_defaults_to_local() {
+        let scope = |args: &[&str]| {
+            parse_desktop_import_scope(
+                &args.iter().map(|value| value.to_string()).collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
+        assert_eq!(scope(&[]), crate::services::mcp::types::ConfigScope::Local);
+        assert_eq!(
+            scope(&["-s", "user"]),
+            crate::services::mcp::types::ConfigScope::User
+        );
+        assert_eq!(
+            scope(&["--scope", "project"]),
+            crate::services::mcp::types::ConfigScope::Project
+        );
+        assert_eq!(
+            scope(&["--scope=local"]),
+            crate::services::mcp::types::ConfigScope::Local
+        );
+    }
+
+    #[test]
+    fn desktop_import_scope_rejects_invalid_and_missing_values() {
+        let error = parse_desktop_import_scope_value("enterprise")
+            .expect_err("enterprise is not an import target");
+        assert!(error.to_string().contains("is not one of"), "{error}");
+        let args = vec!["-s".to_string()];
+        assert!(parse_desktop_import_scope(&args).is_err());
+        let args = vec!["--bogus".to_string()];
+        assert!(parse_desktop_import_scope(&args).is_err());
+    }
+
+    #[test]
+    fn wsl_desktop_config_path_follows_official_userprofile_mapping() {
+        assert_eq!(
+            wsl_desktop_config_path(r"C:\Users\alice"),
+            Some(std::path::PathBuf::from(
+                "/mnt/c/Users/alice/AppData/Roaming/Claude/claude_desktop_config.json"
+            ))
+        );
+        assert_eq!(
+            wsl_desktop_config_path("D:/tester"),
+            Some(std::path::PathBuf::from(
+                "/mnt/d/tester/AppData/Roaming/Claude/claude_desktop_config.json"
+            ))
+        );
+        assert_eq!(wsl_desktop_config_path("relative/path"), None);
+    }
+
+    #[test]
+    fn desktop_mcp_servers_reads_and_sorts_the_servers_object() {
+        let config = serde_json::json!({
+            "mcpServers": {
+                "zeta": { "command": "z" },
+                "alpha": { "command": "a" }
+            }
+        });
+        let servers = desktop_mcp_servers(&config).unwrap();
+        assert_eq!(
+            servers.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "zeta"]
+        );
+        assert_eq!(servers[0].1["command"], "a");
+
+        let error = desktop_mcp_servers(&serde_json::json!({}))
+            .expect_err("a config without mcpServers is rejected");
+        assert!(error.to_string().contains("mcpServers"), "{error}");
+    }
+
+    #[test]
+    fn desktop_import_assigns_numbered_suffixes_to_colliding_names() {
+        with_temp_config_home(|home| {
+            // Seed a colliding server through the same config service used by
+            // `mcp add`, so the import observes a real existing configuration.
+            crate::services::mcp::config::add_mcp_server_config(
+                "docs",
+                &serde_json::json!({ "command": "old-docs" }),
+                crate::services::mcp::types::ConfigScope::User,
+            )
+            .unwrap();
+            assert!(home.join("settings.json").exists() || std::env::var("CLAUDE_CONFIG_DIR").is_ok());
+
+            let servers = vec![
+                ("docs".to_string(), serde_json::json!({ "command": "new-docs" })),
+                ("fresh".to_string(), serde_json::json!({ "command": "fresh-cmd" })),
+            ];
+            let final_names = import_desktop_mcp_servers(
+                &servers,
+                &["docs".to_string()],
+                crate::services::mcp::types::ConfigScope::User,
+            )
+            .unwrap();
+            assert_eq!(final_names, vec!["docs_1", "fresh"]);
+
+            let configs = crate::services::mcp::config::get_mcp_configs_by_scope_readonly(
+                crate::services::mcp::types::ConfigScope::User,
+                &crate::utils::config::load_global_config(),
+                &crate::utils::config::get_current_project_config(),
+            );
+            assert!(configs.servers.contains_key("docs"));
+            assert!(configs.servers.contains_key("docs_1"));
+            assert!(configs.servers.contains_key("fresh"));
+            assert_eq!(
+                configs.servers["docs_1"].command.as_deref(),
+                Some("new-docs")
+            );
+        });
     }
 }

@@ -1710,3 +1710,58 @@ fn mcp_reset_project_choices_reports_empty_projects_and_rejects_options() {
         "error: unknown option '--bogus'"
     );
 }
+
+#[test]
+fn mcp_add_from_claude_desktop_help_matches_official_surface() {
+    let fixture = Fixture::new();
+    let help = fixture.run_command(&["mcp", "add-from-claude-desktop"], &["--help"], None, &[]);
+    assert!(help.status.success());
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains("Usage: cometix mcp add-from-claude-desktop [options]"));
+    assert!(stdout.contains("Import MCP servers from Claude Desktop (Mac and WSL only)"));
+    assert!(stdout.contains("-s, --scope <scope>"));
+    assert!(stdout.contains("(default:"));
+    assert!(stdout.contains("\"local\")"));
+    assert!(help.stderr.is_empty());
+}
+
+#[test]
+fn mcp_add_from_claude_desktop_rejects_invalid_scope_before_platform_check() {
+    let fixture = Fixture::new();
+    let output = fixture.run_command(
+        &["mcp", "add-from-claude-desktop"],
+        &["--scope", "enterprise"],
+        None,
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is not one of 'local', 'user', 'project'"),
+        "stderr={stderr}"
+    );
+
+    let missing = fixture.run_command(
+        &["mcp", "add-from-claude-desktop"],
+        &["-s"],
+        None,
+        &[],
+    );
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("argument missing"));
+}
+
+// Native Windows is not a supported Desktop-import platform (only macOS and
+// WSL are). The official CLI rejects it before touching any configuration.
+#[cfg(target_os = "windows")]
+#[test]
+fn mcp_add_from_claude_desktop_rejects_native_windows() {
+    let fixture = Fixture::new();
+    let output = fixture.run_command(&["mcp", "add-from-claude-desktop"], &[], None, &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert_exit(output, false);
+    assert!(
+        stderr.contains("Unsupported platform - Claude Desktop integration only works on macOS and WSL."),
+        "stderr={stderr}"
+    );
+}
