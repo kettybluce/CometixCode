@@ -75,7 +75,7 @@
 | `--correlation-id <id>` | SDK/宿主关联标识 | 缺失 |
 | `--dangerously-load-development-channels` | 开发 channel 调试开关 | 缺失/内部 |
 | `--desktop` | 转到 Claude Desktop | 缺失 |
-| `--enable-auto-mode` | 启用 auto mode | 缺失 |
+| `--enable-auto-mode` | 启用 auto mode | 已实现：解析后在 dispatch 置位 `auto_mode_state` 的 CLI opt-in flag，`has_auto_mode_opt_in_any_source()` 与权限启动流程读取该 flag；feature gate 仍决定是否真正可用。有 parser 与 dispatch 单测 |
 | `--environment <id>` | 在 self-hosted cloud environment 创建会话 | 缺失 |
 | `--exclude-dynamic-system-prompt-sections` | 将机器动态上下文移到首条 user message | 缺失 |
 | `--exec` | 后台 shell job 模式 | 缺失 |

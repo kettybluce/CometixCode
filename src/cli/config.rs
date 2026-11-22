@@ -51,6 +51,8 @@ pub struct CliConfig {
 
     // --- Model / thinking / effort ---
     pub model: Option<String>,
+    /// Maps to CC `--enable-auto-mode` (CLI opt-in for auto mode).
+    pub enable_auto_mode: bool,
     /// Maps to CC `--prompt-suggestions [value]` (optional boolean value).
     pub prompt_suggestions: Option<String>,
     /// Maps to CC `--brief`: enable the SendUserMessage (BriefTool) capability.
@@ -317,6 +319,7 @@ Live:
       --verbose              Verbose mode
       --bare                 Minimal/simple mode (CLAUDE_CODE_SIMPLE)
       --brief                Enable SendUserMessage (BriefTool) capability
+      --enable-auto-mode     CLI opt-in for auto mode
       --prompt-suggestions [true|false]  Enable predicted next-prompt suggestions
       --model <model>        Session model (or `default`)
       --advisor <model>      Override the advisor model for this session

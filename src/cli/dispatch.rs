@@ -8,6 +8,12 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     if config.bare {
         crate::utils::process_env::set("CLAUDE_CODE_SIMPLE", "1");
     }
+    // `--enable-auto-mode` is the persistent-consent CLI opt-in. Set the flag
+    // that `has_auto_mode_opt_in_any_source()` / permission setup read; the
+    // feature gate itself still decides whether auto mode is actually usable.
+    if config.enable_auto_mode {
+        crate::utils::permissions::auto_mode_state::set_auto_mode_flag_cli(true);
+    }
     // `--prompt-suggestions [value]` maps to the same
     // `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION` env channel that
     // `should_enable_prompt_suggestion_with_snapshots` reads (truthy wins,
@@ -138,6 +144,17 @@ mod tests {
         assert!(crate::utils::env_utils::is_env_truthy(
             crate::utils::process_env::var("CLAUDE_CODE_SIMPLE").as_deref()
         ));
+    }
+
+    #[test]
+    fn dispatch_enable_auto_mode_sets_cli_flag_and_continues() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        crate::utils::permissions::auto_mode_state::set_auto_mode_flag_cli(false);
+        let c = parse_cli_config(&argv(&["--enable-auto-mode"]));
+        assert_eq!(dispatch(&c), None);
+        assert!(crate::utils::permissions::auto_mode_state::get_auto_mode_flag_cli());
+        assert!(crate::utils::permissions::permission_setup::has_auto_mode_opt_in_any_source());
+        crate::utils::permissions::auto_mode_state::set_auto_mode_flag_cli(false);
     }
 
     #[test]
