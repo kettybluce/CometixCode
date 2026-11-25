@@ -10,6 +10,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'scripts/ci-cli-tests.sh'
+      - 'scripts/check-ci-harness.py'
       - '.github/workflows/cli-parity.yml'
   workflow_dispatch:
 
@@ -38,6 +39,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Check verification script failure propagation
+        run: python3 scripts/check-ci-harness.py
       - name: Install pinned Rust and nextest
         shell: bash
         run: |

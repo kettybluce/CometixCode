@@ -14,6 +14,7 @@ sha256sum Cargo.toml Cargo.lock > ci-evidence/dependencies.sha256
 # Explicit integration targets do not silently omit binary-level CLI coverage,
 # and do not pull the monolithic --lib test executable into this small gate.
 targets=()
+shopt -s nullglob
 for source in tests/*.rs; do
     name=${source##*/}
     targets+=(--test "${name%.rs}")
@@ -28,7 +29,13 @@ set +e
 /usr/bin/time -v -o ci-evidence/tests.resources \
     cargo nextest run --locked --no-fail-fast --test-threads=1 \
     "${targets[@]}" 2>&1 | tee ci-evidence/tests.log
-status=${PIPESTATUS[0]}
+pipeline_status=("${PIPESTATUS[@]}")
+status=${pipeline_status[0]}
+# A passing test process without a durable log is not valid evidence. Preserve
+# the test failure when both fail; otherwise propagate the log writer failure.
+if (( status == 0 && pipeline_status[1] != 0 )); then
+    status=${pipeline_status[1]}
+fi
 set -e
 printf '%s\n' "$status" > ci-evidence/tests.exit-code
 

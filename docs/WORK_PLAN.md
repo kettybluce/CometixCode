@@ -15,7 +15,8 @@
 | 上游同步 | 已检查 | `Haleclipse/CometixCode` 的 `master` 仍为 `bad7e08`；个人 fork 领先 23 个提交 |
 | 最新原版核定 | 已完成 | 本机 `claude --version` 与 npm 官方 registry `latest` 均为 `2.1.332` |
 | 本机编译环境 | 已完成 | Rust/Cargo 1.100.0、just 1.59.0、nextest 0.9.152；按用户要求不修改 shell 启动文件 |
-| 当前候选验证 | 部分验证 | 参数纯函数/解析回归 47/47，含 92 条原版接受/拒绝 fixture；完整构建未通过本机 3G 限额，尚无二进制验收。见 [CLI_MCP_ACCEPTANCE.md](CLI_MCP_ACCEPTANCE.md) |
+| 当前候选验证 | 部分验证 | 参数纯函数/解析回归 47/47，含 92 条原版接受/拒绝 fixture；主库和五个集成测试目标编译检查通过。`8abbd66` 已推送，完整构建与真实二进制测试仍未通过/未执行。见 [CLI_MCP_ACCEPTANCE.md](CLI_MCP_ACCEPTANCE.md) |
+| 云端验证 | 阻塞 | 当前 PAT 缺少 `workflow` scope，GitHub 拒绝 workflow 文件推送；普通代码推送已成功。已保留配置模板，没有云端构建或测试结果 |
 | 本机资源与比较台架 P0-A | 已完成 | 内核资源回读、并发锁、台架同程序自检与报告保护通过；见 [DEVELOPMENT_BASELINE.md](DEVELOPMENT_BASELINE.md)。完整构建仍未通过 |
 | 功能整体对齐 | 未完成 | 既有清单基于 2.1.329，大量 CLI、会话、插件与外部集成仍存在缺口 |
 | 性能比较与调优 | 未执行 | 先取得同环境 release 基线，再用同一套负载测原版与复刻版 |
