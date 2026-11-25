@@ -13,3 +13,6 @@
 .trellis/tasks/09-10-init-command-parity/research/proof/**/kitty-*.raw -text -diff
 # These are captured comparison outputs; whitespace is part of the evidence.
 .trellis/tasks/09-10-init-command-parity/research/proof/export-0913/*-export.diff -text -whitespace
+
+# These observed CLI inputs deliberately include leading/trailing spaces.
+tests/fixtures/cli/autocompact-2.1.332.tsv whitespace=-blank-at-eol

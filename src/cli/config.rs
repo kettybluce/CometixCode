@@ -156,9 +156,34 @@ pub struct CliConfig {
 
     /// Unknown flags (not in the wired table) — always Unimplemented.
     pub unknown_flags: Vec<String>,
+    /// Parser errors that must be reported before any launch side effects.
+    pub argument_errors: Vec<String>,
 }
 
 impl CliConfig {
+    /// Reject invalid values before mutating the process environment or
+    /// selecting a launch path. Kept pure for standalone contract coverage.
+    pub fn validate_values(&self) -> Result<(), String> {
+        if let Some(error) = self.argument_errors.first() {
+            return Err(error.clone());
+        }
+        if let Some(raw) = &self.autocompact {
+            super::value_parsers::parse_autocompact_value(raw)?;
+        }
+        if let Some(target) = &self.permission_prompts
+            && target != "host"
+            && target != "none"
+        {
+            return Err(format!(
+                "error: option '--permission-prompts <target>' argument '{target}' is invalid. Allowed choices are host, none."
+            ));
+        }
+        if let Some(value) = &self.prompt_suggestions {
+            super::value_parsers::parse_prompt_suggestions(value)?;
+        }
+        Ok(())
+    }
+
     /// Category-level status table (Batch 9 progress).
     pub fn category_status(&self) -> Vec<(&'static str, ImplStatus)> {
         vec![
@@ -304,6 +329,7 @@ impl CliConfig {
                     | "logout"
                     | "remove"
                     | "reset-project-choices"
+                    | "serve"
             )
         )
     }
@@ -332,7 +358,7 @@ Live:
       --brief                Enable SendUserMessage (BriefTool) capability
       --ax-screen-reader     Flat, animation-free screen-reader output
       --enable-auto-mode     CLI opt-in for auto mode
-      --autocompact <auto|tokens>  Compact window (auto, or 100k-1M tokens)
+      --autocompact <auto|tokens>  Compact window (auto, or at least 100k tokens)
       --prompt-suggestions [true|false]  Enable predicted next-prompt suggestions
       --model <model>        Session model (or `default`)
   -n, --name <name>          Set a display name for this session
@@ -365,6 +391,7 @@ Live:
       --chrome / --no-chrome Claude in Chrome onboarding
       mcp get <name>               Show MCP server details and health
       mcp list                     List configured MCP servers and health
+      mcp serve                    Start the stdio MCP tool server
       mcp remove [options] <name>  Remove an MCP server configuration
       mcp reset-project-choices    Reset project MCP server approvals
       mcp add [options] <name> <commandOrUrl> [args...]
@@ -381,7 +408,7 @@ Live:
 
 Unimplemented (parsed, then exit 1):
       --session-id / --fork-session
-      Subcommands: mcp (except add/add-from-claude-desktop/add-json/get/list/login/logout/remove/reset-project-choices), auth, plugin, update, …
+      Subcommands: mcp (except add/add-from-claude-desktop/add-json/get/list/login/logout/remove/reset-project-choices/serve), auth, plugin, update, …
       --init / --init-only / --maintenance
       --worktree / --tmux / --remote / --bg / daemon
 "

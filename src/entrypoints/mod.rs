@@ -5,4 +5,5 @@
 //! `interactive_helpers` (CC `showSetupScreens`).
 
 pub mod cli;
+pub mod mcp;
 pub mod sandbox_types;

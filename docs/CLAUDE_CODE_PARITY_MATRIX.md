@@ -4,6 +4,27 @@
 > Cometix 对照基线：`966326b`（实现 MCP login/logout 之前的 `fork/master`）
 > Claude 基线：本机 `claude --version` = `2.1.329 (Claude Code)`
 > 官方参考：`https://code.claude.com/docs/en/cli-reference.md`、`commands.md`、`settings-reference.md`、`changelog.md`
+>
+> 2026-11-25 续查：目标版本更新为 **2.1.332**，npm 官方 registry 与本机 CLI 已交叉核对；周末提交已合入至 `5ad47ae`。下方原始审计仍以 2.1.329 为基线，不能直接当作 2.1.332 的验收结果。推进顺序、资源限制和比较方法见 [WORK_PLAN.md](WORK_PLAN.md)。原版版本/help/changelog 快照及本轮验证证据保存在 `.tmp/parity-20261125/`。
+
+## 2.1.330–2.1.332 增量检查
+
+下列项目来自官方 changelog，当前作为待验收条目。已有相似代码不自动等于新版行为已完成。
+
+| 版本 | 增量或修复范围 | 本轮状态 |
+|---|---|---|
+| 2.1.332 | MCP server skills（`server:skill`）、`PreSkillShellCommand` hook 与 inline shell 拒绝 | 未执行；原有 MCP skill producer 缺失仍需关闭 |
+| 2.1.332 | FIFO 读取 20 秒截止、hook 无限输出/超长日志截断、长 wildcard/长 @-mention 防冻结 | 未执行；需要有时间与内存上限的异常输入回归 |
+| 2.1.332 | compaction 连续失败后的最后重试、输出截断后的短摘要恢复 | 未执行；需真实状态转换用例 |
+| 2.1.332 | stdio MCP 输出洪泛、SSE 断流换 endpoint 恢复、task ID 长度 1024 | 未执行；不能以普通连接通过替代 |
+| 2.1.332 | 会话损坏行、长历史恢复、`/stats`、多工具启动与 print 内存改进 | 未执行；纳入功能与性能共同负载 |
+| 2.1.332 | auth 持久化失败 exit 1、NotebookEdit 类型变更、TaskGet blocker 与任务并发更新 | 未执行；分别记录文件/任务副作用 |
+| 2.1.332 | Bedrock/Vertex/Foundry 模型别名、allowlist 与 fallback；Remote Control/IDE/Code Mode 修复 | 未执行；provider 与外部宿主分开验收 |
+| 2.1.331 | doctor API connectivity、response compression 开关、plugin optionalDependencies | 未执行；现有 doctor 核心文本报告不覆盖新增 connectivity |
+| 2.1.331 | MCP malformed reply 截止、compact XML 摘要、hooks 与短终端布局等修复 | 未执行；逐项展开官方 changelog 用例 |
+| 2.1.330 | 官方 changelog 增量 | 快照已保存，逐条映射未完成 |
+
+本表是增量索引，详细覆盖仍须逐条映射 changelog；不代表上列几个分组已覆盖全部发布变更。
 
 ## 状态定义
 
@@ -66,7 +87,7 @@
 | `--allow-dangerously-skip-permissions` | 将 bypassPermissions 加入交互模式循环，但不立即启用 | 已实现：解析为独立 flag，启动时经 `set_bypass_permissions_mode_available_from_cli` 仅设置 `is_bypass_permissions_mode_available`，不切换初始 mode；遵守组织/设置禁用门。有 parser 与 availability 单测；Shift+Tab 循环行为由既有 `get_next_permission_mode` 覆盖 |
 | `--append-subagent-system-prompt` | 为所有子 agent 追加 prompt | 缺失 |
 | `--append-subagent-system-prompt-file` | 从文件追加子 agent prompt | 缺失 |
-| `--autocompact <auto\|tokens>` | 设置本次会话 auto-compact window | 已实现：解析 `--autocompact`/`--autocompact=` 并按官方规则校验（`auto`、`Nk`/`NM`、100–1000 裸数 shorthand、100000–1000000 字面量，范围 100k–1M），非法值在任何启动路径前 exit 1（含 `--version`）；合法值写入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，由 `get_effective_context_window_size` 读取。有 parser、值域解析与 dispatch 单测 |
+| `--autocompact <auto\|tokens>` | 设置本次会话 auto-compact window | 部分验证（2.1.332 候选）：共享纯解析器取消 1M 上限，接受分数 k/M、数字前缀与观察到的千分分隔，拒绝超出 JS safe integer 的值；`auto` 清除继承覆盖。47 个纯模块测试通过，其中重放 92 条原版接受/拒绝样本；真实 CLI/环境副作用待完整构建，边缘值最终 token 数未全验。见 [CLI_MCP_ACCEPTANCE.md](CLI_MCP_ACCEPTANCE.md) |
 | `--ax-screen-reader` | 无边框、无动画的屏幕阅读器输出 | 已实现：解析后在 dispatch 设置 `CLAUDE_CODE_ACCESSIBILITY=1`，复用既有 TextInput 无障碍渲染门禁。有 parser 与 dispatch 单测；完整扁平化/去动画渲染仍由现有 accessibility 渲染路径承担，未做像素级验收 |
 | `--betas <betas...>` | API key 请求 beta headers | 已实现：variadic 解析（含 `--betas=` 形式）→ `ANTHROPIC_BETAS` 逗号拼接 + 缓存失效；`utils/betas.rs` 的 `get_all_model_betas` 已读取该变量。有 parser 与 dispatch 测试；真实 API 请求头未在本机抓包验收 |
 | `--brief` | 启用 SendUserMessage/brief 能力 | 已实现：解析 `--brief` 后在 dispatch 设置 `CLAUDE_CODE_BRIEF=1` 并直接置位 `USER_MSG_OPT_IN`，复用既有 BriefTool/brief system prompt 能力。有 parser 与 dispatch 单测 |
@@ -87,7 +108,7 @@
 | `-n`, `--name` | 会话显示名、resume 名称和终端标题 | 已实现：解析 `-n`/`--name`/`--name=`/`-nshort`，启动时经 `apply_cli_session_name` 写入持久化 custom title + agent name（resume 可见）与内存标题缓存（终端标题/prompt bar）；空/空白名忽略。有 parser 与 session-name 应用单测 |
 | `--permission-prompts host\|none` | headless prompt 的回答者策略 | 已实现：解析并校验 `host`/`none`（大小写敏感，非法值含 `--version` 路径都 exit 1，错误文案与官方一致）。`host` 启用 SDK stdio 权限桥（要求 `--output-format=stream-json`），`none` 走无 resolver 的 deny-all 默认路径。有 parser 与 dispatch 单测 |
 | `--plugin-url <url>` | 本次会话下载 zip plugin | 缺失 |
-| `--prompt-suggestions [value]` | stream-json 输出预测的下一条 prompt | 已实现：接受可选 `true`/`false`（非法/缺失值默认 `true`，且不吞掉位置 prompt），写入 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION`，复用既有 `should_enable_prompt_suggestion_with_snapshots` 与 stream-json 输出。有 parser 与 dispatch 单测；真实生成链未在本机验收 |
+| `--prompt-suggestions [value]` | stream-json 输出预测的下一条 prompt | 部分验证（2.1.332 候选）：大小写不敏感接受 true/false/1/0/yes/no/on/off；可选值消费下一非 flag token，非法值报错，按参数顺序保留 version/help 短路。纯 parser 已验；dispatch 将别名规范化成 true/false，实际进程与生成链未验 |
 | `--ref <branch>` | cloud environment 的基准分支 | 缺失 |
 | `--remote-control [name]` / `--rc` | 启动 Remote Control | 缺失 |
 | `--remote-control-session-name-prefix` | Remote Control 自动会话名前缀 | 缺失 |
@@ -107,7 +128,7 @@
 
 | 命令组 | 必须实现的子命令 | 当前状态 |
 |---|---|---|
-| `mcp` | `add`, `add-from-claude-desktop`, `add-json`, `get`, `list`, `login`, `logout`, `remove`, `reset-project-choices`, `serve` | `add`、`add-from-claude-desktop`、`add-json`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices` 已覆盖核心来源/行为并有真实二进制测试；`login/logout` 的 HTTP OAuth loopback fixture 覆盖 discovery、手工回调、token 持久化、撤销和幂等清理，真实第三方服务、SSE、claude.ai connector、Mac Keychain 尚未在本机验收。`add-from-claude-desktop` 实现了官方 scope 解析、macOS/WSL 路径定位（含 `%USERPROFILE%` 映射与 `/mnt/c/Users` 扫描）、`mcpServers` 读取、重名编号后缀与按 scope 导入；headless CLI 直接全量导入并回报结果，交互式多选由已有 `MCPServerDesktopImportDialog` 覆盖。Mac/WSL 真机导入未在本机验收（原生 Windows 正确返回官方不支持提示）。`serve` 仍缺失 |
+| `mcp` | `add`, `add-from-claude-desktop`, `add-json`, `get`, `list`, `login`, `logout`, `remove`, `reset-project-choices`, `serve` | `add`、`add-from-claude-desktop`、`add-json`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices` 已覆盖核心来源/行为并有真实二进制测试；`login/logout` 的 HTTP OAuth loopback fixture 覆盖 discovery、手工回调、token 持久化、撤销和幂等清理，真实第三方服务、SSE、claude.ai connector、Mac Keychain 尚未在本机验收。`add-from-claude-desktop` 实现了官方 scope 解析、macOS/WSL 路径定位（含 `%USERPROFILE%` 映射与 `/mnt/c/Users` 扫描）、`mcpServers` 读取、重名编号后缀与按 scope 导入；headless CLI 直接全量导入并回报结果，交互式多选由已有 `MCPServerDesktopImportDialog` 覆盖。Mac/WSL 真机导入未在本机验收（原生 Windows 正确返回官方不支持提示）。`serve` 已接入候选：初始化、真实工具调用、错误恢复、取消/EOF 共 5 个二进制用例待执行，当前不计已实现 |
 | `plugin`/`plugins` | `configure`, `details`, `disable`, `enable`, `eval`, `init/new`, `install/i`, `list`, `marketplace`, `prune/autoremove`, `restore-set-aside`, `tag`, `test`, `uninstall/remove`, `update`, `validate` | 交互 UI/loader 存在，顶层 CLI 全部缺失 |
 | `auth` | `login`, `logout`, `status` | 交互命令存在，顶层 CLI 缺失 |
 | `agents` | `--json`, `--all`, `--cwd`、派发默认参数 | agent/task 数据结构有，agent view/JSON shell 入口缺失 |
@@ -128,7 +149,7 @@
 
 | 能力 | 当前状态 | 主要缺口 |
 |---|---|---|
-| session id / named session | 部分 | `--name`、跨项目搜索、运行中 resume/attach、显示名持久化 |
+| session id / named session | 部分 | `--name` 已接入并有应用单测；跨项目搜索、运行中 resume/attach 与完整显示名恢复链尚未验收 |
 | fork / branch / rewind | 部分 | `commands/fork` 是 generated-stub，checkpoint 与文件回滚链未完整 |
 | background session | 缺失 | supervisor、socket、worker、日志、attach、stop、rm、respawn、恢复 |
 | agent view | 部分 | in-process UI 有，shell `claude agents --json`、跨 session 管理未闭环 |
@@ -169,12 +190,12 @@ stdio、SSE、streamable HTTP、WebSocket、OAuth、elicitation、MCP resources/
 
 ### 4.2 缺失
 
-- 顶层 `mcp serve` 仍缺失；`add`、`add-from-claude-desktop`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices`、`add-json` 已接入并有真实二进制测试。`get/list/login/logout` 当前对 plugin/managed/claude.ai/dynamic 来源仍需按官方 scope 再核，不能据核心来源测试宣称完全对齐。
+- 顶层 `mcp serve` 已接入候选，但尚未取得完整构建/真实协议验收结果；`add`、`add-from-claude-desktop`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices`、`add-json` 已接入并有真实二进制测试。`get/list/login/logout` 当前对 plugin/managed/claude.ai/dynamic 来源仍需按官方 scope 再核，不能据核心来源测试宣称完全对齐。
 - MCP resources 转 skill/command 的 producer（当前 feature flag 读取不到真实 MCP skills）。
 - MCP server 登录退出已接入标准 OAuth CLI 路径，HTTP loopback fixture 已验证；真实第三方兼容、SSE、connector、XAA、plugin/managed/claude.ai 来源与企业设置边界仍需继续对照。
 - `add-from-claude-desktop` 已接入 scope/平台检测/路径定位/重名后缀逻辑；Mac/WSL 真机 Desktop config 导入尚未在本机验收（原生 Windows 只验证了不支持提示）。
 - claude.ai connector OAuth 的完整 CLI flow，以及标准 OAuth 的更多服务端边界（动态注册、OAuth 410、跨平台密钥链）。
-- MCP server `serve` 的 stdin/stdout server mode。
+- MCP server `serve` 的 stdin/stdout server mode 候选需完成真实二进制验收；工具清单暂不等同于原版全部 22 项。
 - `mcp_auth_tool` 对 stdio 认证仍是 `Unsupported`，需与官方认证范围明确分支。
 
 代码证据：`src/commands/mcp.rs`、`src/services/mcp/client.rs`、`src/services/mcp/use_manage_mcp_connections.rs`、`src/utils/feature_flags.rs:419`、`src/tools/mcp_auth_tool/mod.rs`。

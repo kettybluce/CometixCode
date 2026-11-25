@@ -156,7 +156,9 @@ tracing = "0.1"
 rmcp = { version = "3.5.1", default-features = false, features = [
     "auth",
     "client",
+    "server",
     "elicitation",
+    "transport-io",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
 ] }

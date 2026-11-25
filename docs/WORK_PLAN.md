@@ -15,7 +15,7 @@
 | 上游同步 | 已检查 | `Haleclipse/CometixCode` 的 `master` 仍为 `bad7e08`；个人 fork 领先 23 个提交 |
 | 最新原版核定 | 已完成 | 本机 `claude --version` 与 npm 官方 registry `latest` 均为 `2.1.332` |
 | 本机编译环境 | 已完成 | Rust/Cargo 1.100.0、just 1.59.0、nextest 0.9.152；按用户要求不修改 shell 启动文件 |
-| 当前候选验证 | 部分验证 | 参数纯函数/解析回归 44/44；完整构建未通过 3G 限额，尚无二进制验收。合入后的新增改动与原始合入基线分开记录 |
+| 当前候选验证 | 部分验证 | 参数纯函数/解析回归 47/47，含 92 条原版接受/拒绝 fixture；完整构建未通过本机 3G 限额，尚无二进制验收。见 [CLI_MCP_ACCEPTANCE.md](CLI_MCP_ACCEPTANCE.md) |
 | 本机资源与比较台架 P0-A | 已完成 | 内核资源回读、并发锁、台架同程序自检与报告保护通过；见 [DEVELOPMENT_BASELINE.md](DEVELOPMENT_BASELINE.md)。完整构建仍未通过 |
 | 功能整体对齐 | 未完成 | 既有清单基于 2.1.329，大量 CLI、会话、插件与外部集成仍存在缺口 |
 | 性能比较与调优 | 未执行 | 先取得同环境 release 基线，再用同一套负载测原版与复刻版 |
@@ -25,7 +25,7 @@
 | 阶段 | 工作内容 | 完成判据 | 状态 |
 |---|---|---|---|
 | P0 基线 | 保存原版 help、版本、最新 changelog、仓库指纹；建立 Rust 与 nextest 环境；检查合入版本 | 可定位的命令、退出码、测试报告与产物指纹；既有失败独立登记 | 进行中 |
-| P1 CLI 与 MCP | 关闭严格解析、值域、优先级、参数遗漏问题；补 `mcp serve`；回归新增 11 个参数、Desktop 导入、doctor | 正常、非法、缺参、重复参数、配置覆盖与实际二进制行为有证据；stdio MCP 有完整初始化/列工具/调用/退出测试 | 未完成 |
+| P1 CLI 与 MCP | 关闭严格解析、值域、优先级、参数遗漏问题；补 `mcp serve`；回归新增 11 个参数、Desktop 导入、doctor | 正常、非法、缺参、重复参数、配置覆盖与实际二进制行为有证据；stdio MCP 有完整初始化/列工具/调用/退出测试 | 进行中：解析模块已验，MCP 候选待真实二进制验收 |
 | P2 本地管理命令 | `auth`、`auto-mode`、`install/update`、`import`、`purge`，以及 plugin/marketplace 管理面 | 用户可从 shell 完成实际管理流程；副作用隔离、持久化回读与错误边界均覆盖 | 未完成 |
 | P3 会话与后台 | name/resume/session-id/fork/rewind、worktree/tmux、后台 supervisor、agent view、attach/logs/stop/rm/respawn | 真会话创建、恢复、停止、重启、文件回滚与多任务状态一致；不以结构体或占位 UI 代替实现 | 未完成 |
 | P4 执行与配置 | structured stream、hooks、settings schema、权限/sandbox、tools/agents/tasks/teams | 原版兼容用例与真实工具链通过；安全拒绝与恢复行为逐项验证 | 未完成 |
@@ -70,7 +70,7 @@ P0 与 P1 先完成；每批实现后完成相关验证并回写记录。发现�
 
 ## 下一项
 
-先完成 P0 合入版本的编译/测试基线，补齐最新参考材料，然后执行 P1 的 CLI 契约回归与 `mcp serve`。性能台架在功能推进中保留基线，功能相应阶段闭环后再做调优。
+停止在本机重复完整构建的 OOM 实验。当前 GitHub PAT 缺少 `workflow` scope，云端流程文件推送被拒绝；已保留 `docs/ci/cli-parity.workflow.yml` 模板，云端测试未启动。权限具备并启用后由 GitHub 托管 runner 以单 Cargo 任务构建并执行集成测试，产物与日志绑定源提交；成功后下载候选，在本机 3 GiB 限额内继续真实协议与文件回读。云端权限或构建失败均单列，不能当作验收通过。性能台架保留，取得 release 产物后再开始产品性能比较。
 
 ## 阶段提交约定（2026-11-25 更新）
 

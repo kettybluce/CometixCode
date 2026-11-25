@@ -73,6 +73,73 @@ fn strip_eq(flag: &str, arg: &str) -> Option<String> {
     arg.strip_prefix(&prefix).map(str::to_string)
 }
 
+fn matches_value_option(arg: &str, flag: &str) -> bool {
+    arg == flag
+        || arg
+            .strip_prefix(flag)
+            .is_some_and(|suffix| suffix.starts_with('='))
+}
+
+fn required_value(
+    args: &[String],
+    index: &mut usize,
+    errors: &mut Vec<String>,
+    declaration: &str,
+) -> Option<String> {
+    let value = take_value(args, index);
+    if value.is_none() {
+        errors.push(format!("error: option '{declaration}' argument missing"));
+    }
+    value
+}
+
+/// Declarations for options whose value is mandatory. Check the declaration
+/// before dispatch so no missing value silently falls through to the TUI.
+fn required_declaration(arg: &str) -> Option<&'static str> {
+    Some(match arg {
+        "--debug-file" => "--debug-file <path>",
+        "--output-format" => "--output-format <format>",
+        "--input-format" => "--input-format <format>",
+        "--json-schema" => "--json-schema <schema>",
+        "--thinking" => "--thinking <mode>",
+        "--effort" => "--effort <level>",
+        "--max-thinking-tokens" => "--max-thinking-tokens <tokens>",
+        "--max-turns" => "--max-turns <turns>",
+        "--max-budget-usd" => "--max-budget-usd <amount>",
+        "--task-budget" => "--task-budget <tokens>",
+        "--fallback-model" => "--fallback-model <model>",
+        "--workload" => "--workload <workload>",
+        "--permission-mode" => "--permission-mode <mode>",
+        "--permission-prompt-tool" => "--permission-prompt-tool <tool>",
+        "--tools" => "--tools <tools...>",
+        "--allowedTools" | "--allowed-tools" => "--allowedTools, --allowed-tools <tools...>",
+        "--disallowedTools" | "--disallowed-tools" => {
+            "--disallowedTools, --disallowed-tools <tools...>"
+        }
+        "--session-id" => "--session-id <uuid>",
+        "--system-prompt-file" => "--system-prompt-file <path>",
+        "--append-system-prompt-file" => "--append-system-prompt-file <path>",
+        "--system-prompt" => "--system-prompt <prompt>",
+        "--append-system-prompt" => "--append-system-prompt <prompt>",
+        "--mcp-config" => "--mcp-config <configs...>",
+        "--setting-sources" => "--setting-sources <sources>",
+        "--settings" => "--settings <file-or-json>",
+        "--add-dir" => "--add-dir <directories...>",
+        "--agents" => "--agents <json-or-file>",
+        "--agent" => "--agent <agent>",
+        "--plugin-dir" => "--plugin-dir <path>",
+        _ => return None,
+    })
+}
+
+fn take_required_values(args: &[String], index: &mut usize) -> Vec<String> {
+    // The first required value may look like an option; later variadic values
+    // stop at an option, as in Commander's required variadic options.
+    let mut values: Vec<_> = take_value(args, index).into_iter().collect();
+    values.extend(take_values_until_flag(args, index));
+    values
+}
+
 /// Parse full argv (including binary name at index 0) into [`CliConfig`].
 ///
 /// Maps to CC `main.tsx` Commander option declarations and parse result.
@@ -94,6 +161,11 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
     while index < args.len() {
         let arg = args[index].clone();
 
+        if arg == "--" {
+            positional.extend(args[index + 1..].iter().cloned());
+            break;
+        }
+
         if let Some(sub) = SUBCOMMANDS.iter().find(|s| **s == arg) {
             config.subcommand = Some((*sub).to_string());
             if *sub == "daemon" {
@@ -106,13 +178,27 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 config.background = true;
             }
             // Consume remaining as opaque for now.
-            index = args.len();
+            break;
+        }
+
+        if index + 1 == args.len()
+            && let Some(declaration) = required_declaration(&arg)
+        {
+            config
+                .argument_errors
+                .push(format!("error: option '{declaration}' argument missing"));
             break;
         }
 
         match arg.as_str() {
-            "-v" | "-V" | "--version" => config.show_version = true,
-            "-h" | "--help" => config.show_help = true,
+            "-v" | "-V" | "--version" => {
+                config.show_version = true;
+                break;
+            }
+            "-h" | "--help" => {
+                config.show_help = true;
+                break;
+            }
             "-d2e" | "--debug-to-stderr" => {
                 config.debug = true;
                 config.debug_to_stderr = true;
@@ -168,7 +254,7 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
             "--maintenance" => config.maintenance = true,
             "--daemon-worker" => config.daemon = true,
 
-            other if other.starts_with("--debug-file") => {
+            other if matches_value_option(other, "--debug-file") => {
                 config.debug = true;
                 if let Some(v) = strip_eq("--debug-file", other) {
                     config.debug_file = Some(PathBuf::from(v));
@@ -184,23 +270,28 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                     }
                 }
             }
-            other if other.starts_with("--output-format") => {
+            other if matches_value_option(other, "--output-format") => {
                 config.print = true;
                 config.output_format =
                     strip_eq("--output-format", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--input-format") => {
+            other if matches_value_option(other, "--input-format") => {
                 config.print = true;
                 config.input_format =
                     strip_eq("--input-format", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--json-schema") => {
+            other if matches_value_option(other, "--json-schema") => {
                 config.print = true;
                 config.json_schema =
                     strip_eq("--json-schema", other).or_else(|| take_value(&args, &mut index));
             }
             other if other == "-n" || other == "--name" => {
-                config.session_name = take_value(&args, &mut index);
+                config.session_name = required_value(
+                    &args,
+                    &mut index,
+                    &mut config.argument_errors,
+                    "-n, --name <name>",
+                );
             }
             other if other.starts_with("--name=") => {
                 config.session_name = strip_eq("--name", other);
@@ -208,93 +299,113 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
             other if other.starts_with("-n") && other.len() > 2 => {
                 config.session_name = Some(other[2..].to_string());
             }
-            other if other.starts_with("--permission-prompts") => {
-                config.permission_prompts =
-                    strip_eq("--permission-prompts", other).or_else(|| take_value(&args, &mut index));
+            other if matches_value_option(other, "--permission-prompts") => {
+                config.permission_prompts = strip_eq("--permission-prompts", other).or_else(|| {
+                    required_value(
+                        &args,
+                        &mut index,
+                        &mut config.argument_errors,
+                        "--permission-prompts <target>",
+                    )
+                });
             }
-            other if other.starts_with("--autocompact") => {
-                config.autocompact =
-                    strip_eq("--autocompact", other).or_else(|| take_value(&args, &mut index));
+            other if matches_value_option(other, "--autocompact") => {
+                config.autocompact = strip_eq("--autocompact", other).or_else(|| {
+                    required_value(
+                        &args,
+                        &mut index,
+                        &mut config.argument_errors,
+                        "--autocompact <auto|tokens>",
+                    )
+                });
             }
             "--include-hook-events" => config.include_hook_events = true,
             "--ax-screen-reader" => config.ax_screen_reader = true,
             "--enable-auto-mode" => config.enable_auto_mode = true,
             "--prompt-suggestions" => {
-                // Optional value with official choices "true"/"false". Only
-                // consume the next token when it is one of them, so a following
-                // positional prompt is never swallowed.
+                // Commander consumes any following non-option value, then
+                // validates it. A positional prompt needs an explicit value
+                // before it, or the `--` end-of-options separator.
                 config.prompt_suggestions = Some(
-                    match args.get(index + 1).map(String::as_str) {
-                        Some(value @ ("true" | "false")) => {
-                            index += 1;
-                            value.to_string()
-                        }
-                        _ => "true".to_string(),
-                    },
+                    take_optional_value(&args, &mut index).unwrap_or_else(|| "true".to_string()),
                 );
             }
             other if other.starts_with("--prompt-suggestions=") => {
                 config.prompt_suggestions = strip_eq("--prompt-suggestions", other);
             }
             "--brief" => config.brief = true,
-            other if other.starts_with("--advisor") => {
-                config.advisor_model =
-                    strip_eq("--advisor", other).or_else(|| take_value(&args, &mut index));
+            other if matches_value_option(other, "--advisor") => {
+                config.advisor_model = strip_eq("--advisor", other).or_else(|| {
+                    required_value(
+                        &args,
+                        &mut index,
+                        &mut config.argument_errors,
+                        "--advisor <model>",
+                    )
+                });
             }
-            other if other.starts_with("--model") => {
-                config.model = strip_eq("--model", other).or_else(|| take_value(&args, &mut index));
+            other if matches_value_option(other, "--model") => {
+                config.model = strip_eq("--model", other).or_else(|| {
+                    required_value(
+                        &args,
+                        &mut index,
+                        &mut config.argument_errors,
+                        "--model <model>",
+                    )
+                });
             }
-            other if other.starts_with("--thinking") => {
+            other if matches_value_option(other, "--thinking") => {
                 config.thinking =
                     strip_eq("--thinking", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--effort") => {
+            other if matches_value_option(other, "--effort") => {
                 config.effort =
                     strip_eq("--effort", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--max-thinking-tokens") => {
+            other if matches_value_option(other, "--max-thinking-tokens") => {
                 config.max_thinking_tokens = strip_eq("--max-thinking-tokens", other)
                     .or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--max-turns") => {
+            other if matches_value_option(other, "--max-turns") => {
                 config.max_turns =
                     strip_eq("--max-turns", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--max-budget-usd") => {
+            other if matches_value_option(other, "--max-budget-usd") => {
                 config.max_budget_usd =
                     strip_eq("--max-budget-usd", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--task-budget") => {
+            other if matches_value_option(other, "--task-budget") => {
                 config.task_budget =
                     strip_eq("--task-budget", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--fallback-model") => {
+            other if matches_value_option(other, "--fallback-model") => {
                 config.fallback_model =
                     strip_eq("--fallback-model", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--workload") => {
+            other if matches_value_option(other, "--workload") => {
                 config.workload =
                     strip_eq("--workload", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--permission-mode") => {
+            other if matches_value_option(other, "--permission-mode") => {
                 config.permission_mode =
                     strip_eq("--permission-mode", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--permission-prompt-tool") => {
+            other if matches_value_option(other, "--permission-prompt-tool") => {
                 config.permission_prompt_tool = strip_eq("--permission-prompt-tool", other)
                     .or_else(|| take_value(&args, &mut index));
             }
             other if other == "--tools" || other.starts_with("--tools=") => {
                 let values = match strip_eq("--tools", other) {
                     Some(value) => vec![value],
-                    None => take_values_until_flag(&args, &mut index),
+                    None => take_required_values(&args, &mut index),
                 };
                 config.tools = Some(values);
             }
             other
-                if other.starts_with("--allowedTools") || other.starts_with("--allowed-tools") =>
+                if matches_value_option(other, "--allowedTools")
+                    || matches_value_option(other, "--allowed-tools") =>
             {
-                let flag = if other.starts_with("--allowedTools") {
+                let flag = if matches_value_option(other, "--allowedTools") {
                     "--allowedTools"
                 } else {
                     "--allowed-tools"
@@ -304,14 +415,14 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 } else {
                     config
                         .allowed_tools
-                        .extend(take_values_until_flag(&args, &mut index));
+                        .extend(take_required_values(&args, &mut index));
                 }
             }
             other
-                if other.starts_with("--disallowedTools")
-                    || other.starts_with("--disallowed-tools") =>
+                if matches_value_option(other, "--disallowedTools")
+                    || matches_value_option(other, "--disallowed-tools") =>
             {
-                let flag = if other.starts_with("--disallowedTools") {
+                let flag = if matches_value_option(other, "--disallowedTools") {
                     "--disallowedTools"
                 } else {
                     "--disallowed-tools"
@@ -321,7 +432,7 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                 } else {
                     config
                         .disallowed_tools
-                        .extend(take_values_until_flag(&args, &mut index));
+                        .extend(take_required_values(&args, &mut index));
                 }
             }
             other if other == "--resume" || other.starts_with("--resume=") => {
@@ -338,69 +449,79 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                     None => take_optional_value(&args, &mut index).or_else(|| Some(String::new())),
                 };
             }
-            other if other.starts_with("--session-id") => {
+            other if matches_value_option(other, "--session-id") => {
                 config.session_id =
                     strip_eq("--session-id", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--system-prompt-file") => {
+            other if matches_value_option(other, "--system-prompt-file") => {
                 if let Some(v) = strip_eq("--system-prompt-file", other)
                     .or_else(|| take_value(&args, &mut index))
                 {
                     config.system_prompt_file = Some(PathBuf::from(v));
                 }
             }
-            other if other.starts_with("--append-system-prompt-file") => {
+            other if matches_value_option(other, "--append-system-prompt-file") => {
                 if let Some(v) = strip_eq("--append-system-prompt-file", other)
                     .or_else(|| take_value(&args, &mut index))
                 {
                     config.append_system_prompt_file = Some(PathBuf::from(v));
                 }
             }
-            other if other.starts_with("--system-prompt") => {
+            other if matches_value_option(other, "--system-prompt") => {
                 config.system_prompt =
                     strip_eq("--system-prompt", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--append-system-prompt") => {
+            other if matches_value_option(other, "--append-system-prompt") => {
                 config.append_system_prompt = strip_eq("--append-system-prompt", other)
                     .or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--betas") => {
+            other if matches_value_option(other, "--betas") => {
                 if let Some(value) = strip_eq("--betas", other) {
                     config.betas.push(value);
                 } else {
-                    config.betas.extend(take_values_until_flag(&args, &mut index));
+                    if let Some(value) = required_value(
+                        &args,
+                        &mut index,
+                        &mut config.argument_errors,
+                        "--betas <betas...>",
+                    ) {
+                        config.betas.push(value);
+                        config
+                            .betas
+                            .extend(take_values_until_flag(&args, &mut index));
+                    }
                 }
             }
-            other if other.starts_with("--mcp-config") => {
+            other if matches_value_option(other, "--mcp-config") => {
                 if let Some(value) = strip_eq("--mcp-config", other) {
                     config.mcp_config.push(value);
                 } else {
                     config
                         .mcp_config
-                        .extend(take_values_until_flag(&args, &mut index));
+                        .extend(take_required_values(&args, &mut index));
                 }
             }
-            other if other.starts_with("--setting-sources") => {
+            other if matches_value_option(other, "--setting-sources") => {
                 config.setting_sources =
                     strip_eq("--setting-sources", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--settings") => {
+            other if matches_value_option(other, "--settings") => {
                 if let Some(v) =
                     strip_eq("--settings", other).or_else(|| take_value(&args, &mut index))
                 {
                     config.settings = Some(PathBuf::from(v));
                 }
             }
-            other if other.starts_with("--add-dir") => {
+            other if matches_value_option(other, "--add-dir") => {
                 if let Some(v) = strip_eq("--add-dir", other) {
                     config.add_dirs.push(PathBuf::from(v));
                 } else {
-                    for v in take_values_until_flag(&args, &mut index) {
+                    for v in take_required_values(&args, &mut index) {
                         config.add_dirs.push(PathBuf::from(v));
                     }
                 }
             }
-            other if other.starts_with("--agents") => {
+            other if matches_value_option(other, "--agents") => {
                 config.agents_json =
                     strip_eq("--agents", other).or_else(|| take_value(&args, &mut index));
             }
@@ -409,7 +530,7 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
             // option for multiple session-only plugins; do not swallow the
             // following positional prompt or subcommand as another path.
             "--plugin-dir" => {
-                if let Some(v) = take_optional_value(&args, &mut index) {
+                if let Some(v) = take_value(&args, &mut index) {
                     config.plugin_dirs.push(PathBuf::from(v));
                 }
             }
@@ -418,31 +539,31 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
                     config.plugin_dirs.push(PathBuf::from(v));
                 }
             }
-            other if other.starts_with("--agent-id") => {
+            other if matches_value_option(other, "--agent-id") => {
                 config.agent_id =
                     strip_eq("--agent-id", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--agent-name") => {
+            other if matches_value_option(other, "--agent-name") => {
                 config.agent_name =
                     strip_eq("--agent-name", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--team-name") => {
+            other if matches_value_option(other, "--team-name") => {
                 config.team_name =
                     strip_eq("--team-name", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--agent-color") => {
+            other if matches_value_option(other, "--agent-color") => {
                 config.agent_color =
                     strip_eq("--agent-color", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--parent-session-id") => {
+            other if matches_value_option(other, "--parent-session-id") => {
                 config.parent_session_id = strip_eq("--parent-session-id", other)
                     .or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--teammate-mode") => {
+            other if matches_value_option(other, "--teammate-mode") => {
                 config.teammate_mode =
                     strip_eq("--teammate-mode", other).or_else(|| take_value(&args, &mut index));
             }
-            other if other.starts_with("--agent-type") => {
+            other if matches_value_option(other, "--agent-type") => {
                 config.agent_type =
                     strip_eq("--agent-type", other).or_else(|| take_value(&args, &mut index));
             }
@@ -466,6 +587,14 @@ pub fn parse_cli_config(argv: &[String]) -> CliConfig {
             _ => positional.push(arg),
         }
 
+        // Commander applies argument coercion as it reads each option, so an
+        // invalid value cannot be hidden by a later repeat or --version.
+        if let Err(error) = config.validate_values() {
+            if config.argument_errors.is_empty() {
+                config.argument_errors.push(error);
+            }
+            break;
+        }
         index += 1;
     }
 
@@ -517,12 +646,16 @@ mod tests {
         );
         assert_eq!(repeated.prompt.as_deref(), Some("prompt"));
 
-        // Commander reports a missing option argument and leaves the next
-        // flag available for its own parser; the projection keeps that flag
-        // visible instead of consuming it as a directory.
-        let missing = parse_cli_config(&argv(&["--plugin-dir", "--verbose"]));
-        assert!(missing.plugin_dirs.is_empty());
-        assert!(missing.verbose);
+        // A required value consumes the next token even when it resembles a
+        // flag; only the absence of that token is a missing argument.
+        let flag_value = parse_cli_config(&argv(&["--plugin-dir", "--verbose"]));
+        assert_eq!(flag_value.plugin_dirs, [PathBuf::from("--verbose")]);
+        assert!(!flag_value.verbose);
+        assert!(
+            parse_cli_config(&argv(&["--plugin-dir"]))
+                .validate_values()
+                .is_err()
+        );
     }
 
     #[test]
@@ -781,9 +914,9 @@ mod tests {
         let inline = parse_cli_config(&argv(&["--prompt-suggestions=false"]));
         assert_eq!(inline.prompt_suggestions.as_deref(), Some("false"));
 
-        // A positional prompt must not be consumed as the value.
-        let with_prompt = parse_cli_config(&argv(&["--prompt-suggestions", "explain this"]));
-        assert_eq!(with_prompt.prompt_suggestions.as_deref(), Some("true"));
+        // Optional values consume a non-option token before the prompt.
+        let with_prompt = parse_cli_config(&argv(&["--prompt-suggestions", "yes", "explain this"]));
+        assert_eq!(with_prompt.prompt_suggestions.as_deref(), Some("yes"));
         assert_eq!(with_prompt.prompt.as_deref(), Some("explain this"));
     }
 

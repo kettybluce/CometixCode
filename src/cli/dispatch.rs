@@ -31,7 +31,12 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     // `should_enable_prompt_suggestion_with_snapshots` reads (truthy wins,
     // defined-falsy disables).
     if let Some(value) = &config.prompt_suggestions {
-        crate::utils::process_env::set("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION", value);
+        if let Ok(enabled) = super::value_parsers::parse_prompt_suggestions(value) {
+            crate::utils::process_env::set(
+                "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION",
+                if enabled { "true" } else { "false" },
+            );
+        }
     }
     // `--brief` maps to CC's `maybeActivateBrief()` at startup; set the opt-in
     // flag directly because USER_MSG_OPT_IN is seeded once from the env var.
@@ -48,33 +53,16 @@ pub fn apply_live_env_side_effects(config: &CliConfig) {
     }
     // `--autocompact` writes the parsed window to the env channel read by
     // `get_effective_context_window_size`; `auto` clears any override.
-    if let Some(raw) = &config.autocompact
-        && let Ok(Some(tokens)) =
-            crate::services::compact::auto_compact::parse_autocompact_value(raw)
-    {
-        crate::utils::process_env::set(
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-            &tokens.to_string(),
-        );
-    }
-}
-
-/// Validate options that must hard-fail before any launch path (matching
-/// commander's argument coercion). Returns an error message on invalid input.
-fn validate_cli_values(config: &CliConfig) -> Result<(), String> {
     if let Some(raw) = &config.autocompact {
-        crate::services::compact::auto_compact::parse_autocompact_value(raw)
-            .map_err(|error| error.to_string())?;
+        match super::value_parsers::parse_autocompact_value(raw) {
+            Ok(Some(tokens)) => crate::utils::process_env::set(
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+                &tokens.to_string(),
+            ),
+            Ok(None) => crate::utils::process_env::remove("CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
+            Err(_) => {} // Dispatch validates before any side effects.
+        }
     }
-    if let Some(target) = &config.permission_prompts
-        && target != "host"
-        && target != "none"
-    {
-        return Err(format!(
-            "error: option '--permission-prompts <target>' argument '{target}' is invalid. Allowed choices are host, none."
-        ));
-    }
-    Ok(())
 }
 
 /// Short-circuit Unimplemented reasons to stderr; returns exit code `1`.
@@ -94,7 +82,7 @@ pub fn exit_unimplemented(reasons: &[String]) -> i32 {
 /// Returns `Some(exit_code)` when the process should exit without interactive
 /// [`crate::main::run`]. Returns `None` to continue into interactive launch.
 pub fn dispatch(config: &CliConfig) -> Option<i32> {
-    if let Err(message) = validate_cli_values(config) {
+    if let Err(message) = config.validate_values() {
         eprintln!("{message}");
         return Some(1);
     }
@@ -227,7 +215,9 @@ mod tests {
         crate::utils::hooks::hook_events::clear_hook_event_state();
         let c = parse_cli_config(&argv(&["--include-hook-events"]));
         assert_eq!(dispatch(&c), None);
-        assert!(crate::utils::hooks::hook_events::should_emit_hook_event("PreToolUse"));
+        assert!(crate::utils::hooks::hook_events::should_emit_hook_event(
+            "PreToolUse"
+        ));
         crate::utils::hooks::hook_events::clear_hook_event_state();
     }
 
@@ -277,6 +267,35 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_prompt_suggestions_normalizes_aliases_and_rejects_invalid_values() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::unset("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION");
+        for (value, expected) in [("YES", "true"), ("off", "false"), ("0", "false")] {
+            let c = parse_cli_config(&argv(&["--prompt-suggestions", value]));
+            assert_eq!(dispatch(&c), None);
+            assert_eq!(
+                crate::utils::process_env::var("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION").as_deref(),
+                Some(expected)
+            );
+        }
+        let invalid = parse_cli_config(&argv(&["--prompt-suggestions=bogus", "--version"]));
+        assert_eq!(dispatch(&invalid), Some(1));
+        assert_eq!(
+            crate::utils::process_env::var("CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION").as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn dispatch_autocompact_auto_clears_inherited_window_override() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+        let _env = EnvVarGuard::set("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "200000");
+        let config = parse_cli_config(&argv(&["--autocompact", "auto"]));
+        assert_eq!(dispatch(&config), None);
+        assert!(crate::utils::process_env::var("CLAUDE_CODE_AUTO_COMPACT_WINDOW").is_none());
+    }
+
+    #[test]
     fn dispatch_brief_sets_user_msg_opt_in_and_continues() {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
         let _brief = EnvVarGuard::unset("CLAUDE_CODE_BRIEF");
@@ -303,9 +322,11 @@ mod tests {
             crate::utils::process_env::var("ANTHROPIC_BETAS").as_deref(),
             Some("beta-one,beta-two")
         );
-        assert!(crate::utils::betas::get_all_model_betas("claude-sonnet-4-6")
-            .iter()
-            .any(|beta| beta == "beta-one"));
+        assert!(
+            crate::utils::betas::get_all_model_betas("claude-sonnet-4-6")
+                .iter()
+                .any(|beta| beta == "beta-one")
+        );
     }
 
     #[test]

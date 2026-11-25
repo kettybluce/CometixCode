@@ -62,12 +62,20 @@ pub fn maybe_run_mcp_cli(argv: &[String]) -> Option<i32> {
             "logout" => print_mcp_logout_help(),
             "remove" => print_mcp_remove_help(),
             "reset-project-choices" => print_mcp_reset_project_choices_help(),
+            "serve" => crate::entrypoints::mcp::print_help(),
             _ => return None,
         }
         return Some(0);
     }
 
     match subcommand {
+        "serve" => Some(match crate::entrypoints::mcp::run(args) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        }),
         "add" => Some(match run_mcp_add_cli(args) {
             Ok(()) => 0,
             Err(error) => {

@@ -11,7 +11,7 @@
 | 优先级与并发 | nice 15、I/O idle；Cargo、nextest、Rust tests、Rayon 均为单并发；嵌套运行被 flock 拒绝 | `resource-limits-green-2.json` |
 | 台架端到端自检 | 用同一个原版程序充当两个标签；各 3 次预热、20 个正式样本，退出码/输出/统计均有效 | `benchmark-harness-selfcheck-2.json`；**不是复刻版性能结果** |
 | 报告与样本保护 | 既有报告拒绝覆盖且哈希不变；少于 20 个样本拒绝启动；shell/Python 语法检查通过 | `tooling-validation-1.json` |
-| 完整开发构建 | 未通过：单体库在当前 3G 限额内进入单态化前后被终止，尚无可运行产物 | `build-dev-1`～`build-dev-5` 日志及 `.resources` |
+| 完整开发构建 | 未通过：单体库在当前 3G 限额内进入单态化前后被终止，尚无可运行产物；Rust 1.88 与按需代码生成实验同样未解决 | `build-dev-1`～`build-dev-5`、`build-dev-msrv-1`、`build-dev-lazy-1` 日志及 `.resources` |
 | 发布构建和功能/性能比较 | 未执行；不能用台架自检、参数纯函数测试或库检查代替 | 尚无 release 产物 |
 
 原始证据统一位于忽略目录 `.tmp/parity-20261125/evidence/`，不提交原版分发包、用户配置、凭据和运行产物。对照目标冻结为此前实测的 Claude Code 2.1.332；后续 P7 再核目标版本。

@@ -1,0 +1,64 @@
+name: CLI and MCP candidate verification
+
+on:
+  push:
+    branches:
+      - 'feat/claude-*-parity'
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/ci-cli-tests.sh'
+      - '.github/workflows/cli-parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-parity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: '1.100.0'
+      CARGO_BUILD_JOBS: '1'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      NEXTEST_TEST_THREADS: '1'
+      RUST_TEST_THREADS: '1'
+      RAYON_NUM_THREADS: '1'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust and nextest
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          curl --fail --location --retry 3 \
+            https://get.nexte.st/0.9.152/linux -o "$RUNNER_TEMP/nextest.tar.gz"
+          tar -xzf "$RUNNER_TEMP/nextest.tar.gz" -C "$HOME/.cargo/bin" cargo-nextest
+          rustc --version
+          cargo nextest --version
+      - name: Compile and run real executable tests sequentially
+        shell: bash
+        run: bash scripts/ci-cli-tests.sh
+      - name: Upload candidate and evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cli-parity-${{ github.sha }}
+          retention-days: 5
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            ci-evidence/
+            target/debug/cometix
