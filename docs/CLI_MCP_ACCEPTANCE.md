@@ -1,6 +1,6 @@
 # CLI 与 MCP 候选验证记录（2026-11-25）
 
-目标原版：Claude Code 2.1.332。源基线：`58afa23c9f5141786ec5ca33b6507c45f966d83e`；CLI/MCP 候选为 `8abbd66bbd373c40bb4d33b916e88ab56fe09b0a`，已推送并回读确认。2026-11-26 补测已取得真实开发二进制并通过 CLI/MCP 集成测试；具体文件 SHA-256 见本轮 `.tmp/parity-20261125/manifest.json`。P1 剩余值域与配置覆盖仍待继续，整体 P1 尚未验收完成。2026-11-26 的 `auto-mode` 子阶段已完成原版契约实测、逐字节对比与真实二进制 8/8，见下文独立小节；P2 整体仍未完成。
+目标原版：Claude Code 2.1.332。源基线：`58afa23c9f5141786ec5ca33b6507c45f966d83e`；CLI/MCP 候选为 `8abbd66bbd373c40bb4d33b916e88ab56fe09b0a`，已推送并回读确认。2026-11-26 补测已取得真实开发二进制并通过 CLI/MCP 集成测试；具体文件 SHA-256 见本轮 `.tmp/parity-20261125/manifest.json`。P1 剩余值域与配置覆盖仍待继续，整体 P1 尚未验收完成。2026-11-26 的 `auto-mode` 子阶段已完成原版契约实测、逐字节对比与真实二进制 8/8；`import` 的 2.1.332 未开放契约也已对齐（不宣称实际导入可用），见下文独立小节；P2 整体仍未完成。
 
 ## 测试结论
 
@@ -11,10 +11,11 @@
 | 大数与分隔符缺陷红绿重放 | 通过 | 隔离旧生产模块 46 通过、1 失败（safe integer 小数边界），修复后 47/47；保留旧模块与原始失败记录 |
 | 主库类型/借用检查 | 通过（实验编译参数） | `cargo check --locked --offline --lib` 退出 0；关闭 debug/incremental、使用独立 allocator/MIR 参数，只证明库检查，不证明可链接二进制或测试执行 |
 | 五个集成测试目标类型/借用检查 | 通过（仅编译检查） | 候选 `8abbd66` 上 `cli_value_contract`、`mcp_serve`、`cli_parser_contract`、`doctor_cli`、`mcp_add_json` 的 `cargo check --test` 退出 0；没有执行这些测试 |
-| 完整本机二进制开发构建 | 通过（构建期临时 5G 上限） | Rust 1.88 主库构建退出 0，耗时 20m01s，峰值 RSS 5,077,244 KiB，未使用 swap；3 GiB 在单态化阶段停滞/SIGKILL，4 GiB 仍被内存回收拖慢，5 GiB 才完成。该次产物 `target/msrv-1.88/debug/cometix` 的 SHA-256 为 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`；后续 auto-mode 测试重新链接后当前产物 SHA-256 为 `fb6b68df0e8dbdc375493fa491e8c21662245adb61e785da3e58dc863cd18876`，旧指纹已被覆盖 |
+| 完整本机二进制开发构建 | 通过（构建期临时 5G 上限） | Rust 1.88 主库构建退出 0，耗时 20m01s，峰值 RSS 5,077,244 KiB，未使用 swap；3 GiB 在单态化阶段停滞/SIGKILL，4 GiB 仍被内存回收拖慢，5 GiB 才完成。该次产物 `target/msrv-1.88/debug/cometix` 的 SHA-256 为 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`；后续 auto-mode/import 测试重新链接后当前产物 SHA-256 为 `63f925baef2c7b016cb733e21019065a9f32005edcc13bcffeddd30b58b91fb1`，旧指纹已被覆盖 |
 | 真实 CLI 参数、doctor、Desktop/MCP 配置回归 | 通过 | 真实二进制与生产 parser 模块：`cli_parser_contract` 47/47、`cli_value_contract` 4/4、`doctor_cli` 3/3、`mcp_add_json` 35/35 |
 | stdio MCP 实际工具调用 | 通过 | `mcp_serve` 5/5：初始化、真实工具 schema、Read→Edit→Write→磁盘回读、未知工具/非法输入后 ping、取消并回收 shell、EOF 回收 shell；stdout 仅协议 |
 | auto-mode 本地管理命令 | 通过（真实二进制） | `tests/auto_mode_cli.rs` 8/8；`defaults`、`--label`、`config`（含 `$defaults`、`hard_deny`、`--settings`）与原版 2.1.332 逐字节一致；`reset` 的文件副作用、确认与非法 JSON 边界通过。`critique` 只验证了无自定义规则时不发起模型调用，真实模型链未验。见下文独立小节 |
+| import CLI 契约 | 通过（真实二进制） | 原版 2.1.332 的 `import` 本身未开放；`tests/import_cli.rs` 5/5 对齐帮助、unavailable 文案、未知选项与 `--` 边界，且不写 settings。不是实际导入实现 |
 | 发布构建与原版性能比较 | 未执行 | 没有复刻版 release 产物，不给出产品提速结论 |
 
 ## 2026-11-26 真实二进制补测
@@ -112,6 +113,24 @@ bash scripts/limited-run.sh bash -c '
   cargo +1.88.0 test --locked --offline --test auto_mode_cli -- --test-threads=1
 '
 ```
+
+## 2026-11-26 import 子阶段
+
+原版 2.1.332 的 `import` 只提供命令契约，不执行导入：`--help` 正常返回，实际执行在 stderr 打印以下文本并 exit 1：
+
+```text
+`claude import` is not yet available in this build. Run `claude` and use /mcp or edit ~/.claude/settings.json directly.
+```
+
+本轮按该契约接入，不虚构导入器。
+
+- `--help`、`-h`、`--dry-run --help`、`codex -h`、`--bogus --help`、`--bogus -- --help` 均 exit 0，stdout 为帮助文本；仅按项目惯例把命令名 `claude` 改为 `cometix`。
+- 无参数、`codex`/`gemini`/`cursor`/`bogus`、`--dry-run`、`--yes`、`--yes=<digest>`、`--` 等均 exit 1，stdout 为空，stderr 精确匹配 unavailable 文案。
+- 未知选项 `--bogus`、`--dry-run=true`、`-z` 走 commander 错误；`--yes=<digest>` 后跟另一个选项时，原版会报告 `--yes=<digest>`，现已对齐。
+- `-- --help` 把 help 当作 positional，不显示帮助；`--bogus -- --help` 因解析已失败而仍显示帮助。两类边界均有真实二进制用例。
+- `tests/import_cli.rs` 5/5；另用 17 组命令对原版与复刻版做 stdout/stderr/退出码对比（仅把 `claude` 归一化为 `cometix`），17/17 一致。合并 import+auto-mode 的真实二进制重编译加运行耗时 3m47.14s，峰值 RSS 5,363,012 KiB，无 swap。
+- 注册 `import` subcommand 后复跑纯 parser 合约 47/47，既有参数解析未回归。
+- 测试确认不创建 `settings.json`。边界：原版没有可执行的导入逻辑，因此本阶段没有 codex/gemini/cursor 配置实际导入结果，也不宣称该集成可用。
 
 ## 缺陷与归因
 

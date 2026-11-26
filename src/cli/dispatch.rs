@@ -134,6 +134,12 @@ pub fn dispatch(config: &CliConfig) -> Option<i32> {
         return crate::commands::auto_mode::maybe_run_auto_mode_cli(&config.argv);
     }
 
+    // `import` mirrors the shipped 2.1.332 unavailable contract; its help and
+    // option errors must not be swallowed by the generic unimplemented path.
+    if config.subcommand.as_deref() == Some("import") {
+        return crate::commands::import::maybe_run_import_cli(&config.argv);
+    }
+
     // Preserve historical ant-only / feature-gated messaging where useful,
     // but unify on `Unimplemented:` for incomplete commander surface.
     let reasons = config.unimplemented_reasons();

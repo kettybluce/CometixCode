@@ -135,7 +135,7 @@
 | `auto-mode` | `config`, `critique`, `defaults`, `reset` | 已实现：`defaults` 与冻结原版规则逐字节一致（allow 16 / soft_deny 72 / hard_deny 1 / environment 21），`--label` 过滤一致；`config` 只合并 user/flag/policy 来源，支持 `$defaults`、空数组和 `--settings`，与原版逐字节一致；`reset` 只删除 `autoMode`，确认、`-y`、非法 JSON 边界通过。真实二进制 8/8。已知差异：多顶层键文件的 reset 键顺序不同，JSON 语义一致；`critique` 仅验证无自定义规则时不调用模型，真实模型 side query 未验 |
 | `doctor` | 安装、settings、Remote Control、OTel 只读诊断 | 顶层 CLI 已接入：复用 `utils/doctor_diagnostic` 与交互 `/doctor` 共享的数据模型，打印安装类型/版本/平台/路径/搜索/自动更新/问题清单文本报告，有真实二进制测试。远程策略、OTel、安装修复等需网络或副作用的项目未覆盖 |
 | `gateway` | `--config` 企业 gateway 进程 | 缺失 |
-| `import` | `codex/gemini/cursor`, `--dry-run`, `--yes` | 缺失 |
+| `import` | `codex/gemini/cursor`, `--dry-run`, `--yes` | 已实现（仅 2.1.332 未开放契约）：`--help`、unavailable 文案、未知选项与 `--` 边界和原版一致，真实二进制 5/5，17/17 命令对比一致，不写 settings。原版 2.1.332 同样不执行导入，因此没有可对齐的导入行为；不宣称集成已可用 |
 | `install` | `stable/latest/version`, `--force` | 缺失 |
 | `purge` | 项目数据清理、`--dry-run/-y/-i/--all` | 缺失 |
 | `remote-control`/`rc` | server mode、命名、恢复 | 缺失 |

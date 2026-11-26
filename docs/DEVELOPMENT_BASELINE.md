@@ -66,8 +66,9 @@ P0-A 当时记录的“完整开发构建未通过”仍是历史事实；本轮
 | 5 GiB 构建 | 通过 | Rust 1.88、20m01s、峰值 RSS 5,077,244 KiB、无 swap、退出码 0；`monomorphization_collector_graph_walk` 约 28s |
 | 真实 CLI/MCP 测试 | 通过 | `mcp_serve` 5/5、`cli_parser_contract` 47/47、`cli_value_contract` 4/4、`doctor_cli` 3/3、`mcp_add_json` 35/35 |
 | auto-mode 真实二进制测试 | 通过 | `tests/auto_mode_cli.rs` 8/8；最终排版后重编译加运行 3m33.26s、峰值 RSS 5,374,880 KiB；此前未排版版本 `--no-run` 构建 3m39.82s、峰值 5,448,160 KiB；均无 swap |
+| import + auto-mode 合并真实二进制测试 | 通过 | `import_cli` 5/5、`auto_mode_cli` 8/8；重编译加运行 3m47.14s、峰值 RSS 5,363,012 KiB、无 swap |
 | 受影响 lib 单测（非门禁） | 未完成（资源） | 5G cgroup 下编译 lib test 到 `MIR_borrow_checking` 后被 SIGKILL，峰值 RSS 5,342,468 KiB、无 swap；按工作计划不把同进程 `cargo test --lib` 当门禁，未提高上限 |
 
-产物：`target/msrv-1.88/debug/cometix`。2026-11-25 首次完整构建的 SHA-256 为 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`；2026-11-26 加入 auto-mode、排版并重跑 `cargo test` 后重新链接，当前 SHA-256 为 `fb6b68df0e8dbdc375493fa491e8c21662245adb61e785da3e58dc863cd18876`，旧指纹已被覆盖。`scripts/limited-run.sh` 新增 `COMETIX_MEMORY_HIGH`、`COMETIX_MEMORY_MAX`、`COMETIX_MEMORY_SWAP_MAX` 覆盖；默认仍是 3 GiB，本轮只在完整构建命令上临时使用 5 GiB，未改常规约束、未启用 swap。
+产物：`target/msrv-1.88/debug/cometix`。2026-11-25 首次完整构建的 SHA-256 为 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`；2026-11-26 加入 auto-mode/import、排版并重跑 `cargo test` 后重新链接，当前 SHA-256 为 `63f925baef2c7b016cb733e21019065a9f32005edcc13bcffeddd30b58b91fb1`，旧指纹已被覆盖。`scripts/limited-run.sh` 新增 `COMETIX_MEMORY_HIGH`、`COMETIX_MEMORY_MAX`、`COMETIX_MEMORY_SWAP_MAX` 覆盖；默认仍是 3 GiB，本轮只在完整构建命令上临时使用 5 GiB，未改常规约束、未启用 swap。
 
 该补记不改变 release 构建和原版性能比较仍未执行的结论。debug 产物只用于开发验证，不能用于性能排名。

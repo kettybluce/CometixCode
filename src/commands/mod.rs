@@ -31,6 +31,7 @@ pub mod fast;
 pub mod help;
 pub mod hooks;
 pub mod ide;
+pub mod import;
 pub mod init;
 pub mod keybindings;
 pub mod login;

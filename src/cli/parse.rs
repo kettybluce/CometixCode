@@ -17,6 +17,7 @@ const SUBCOMMANDS: &[&str] = &[
     "upgrade",
     "agents",
     "auto-mode",
+    "import",
     "install",
     "setup-token",
     "migrate",

@@ -230,7 +230,8 @@ impl CliConfig {
                 if (self.subcommand.is_some()
                     && !self.is_live_mcp_command()
                     && self.subcommand.as_deref() != Some("doctor")
-                    && self.subcommand.as_deref() != Some("auto-mode"))
+                    && self.subcommand.as_deref() != Some("auto-mode")
+                    && self.subcommand.as_deref() != Some("import"))
                     || self.worktree
                     || self.tmux
                     || self.remote
@@ -282,6 +283,7 @@ impl CliConfig {
             && !self.is_live_mcp_command()
             && sub != "doctor"
             && sub != "auto-mode"
+            && sub != "import"
         {
             reasons.push(sub.clone());
         }
@@ -402,6 +404,8 @@ Live:
       mcp logout <name>             Clear stored MCP OAuth credentials
       mcp add-json <name> <json|->  Add an MCP server; '-' reads JSON from stdin
       doctor                     Check installation health (text report)
+      auto-mode [command]        Inspect or reset auto mode configuration
+      import [options] [source]  Import config from another agent (unavailable in 2.1.332)
   -p, --print                Headless/print path
       --output-format / --input-format / --json-schema / --stream-json
       --include-partial-messages / --replay-user-messages
