@@ -229,7 +229,8 @@ impl CliConfig {
                 "worktree/tmux/remote/bg/daemon/subcommands",
                 if (self.subcommand.is_some()
                     && !self.is_live_mcp_command()
-                    && self.subcommand.as_deref() != Some("doctor"))
+                    && self.subcommand.as_deref() != Some("doctor")
+                    && self.subcommand.as_deref() != Some("auto-mode"))
                     || self.worktree
                     || self.tmux
                     || self.remote
@@ -280,6 +281,7 @@ impl CliConfig {
         if let Some(sub) = &self.subcommand
             && !self.is_live_mcp_command()
             && sub != "doctor"
+            && sub != "auto-mode"
         {
             reasons.push(sub.clone());
         }

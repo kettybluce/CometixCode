@@ -1,6 +1,6 @@
 # CLI 与 MCP 候选验证记录（2026-11-25）
 
-目标原版：Claude Code 2.1.332。源基线：`58afa23c9f5141786ec5ca33b6507c45f966d83e`；CLI/MCP 候选为 `8abbd66bbd373c40bb4d33b916e88ab56fe09b0a`，已推送并回读确认。2026-11-26 补测已取得真实开发二进制并通过 CLI/MCP 集成测试；具体文件 SHA-256 见本轮 `.tmp/parity-20261125/manifest.json`。P1 剩余值域与配置覆盖仍待继续，整体 P1 尚未验收完成。
+目标原版：Claude Code 2.1.332。源基线：`58afa23c9f5141786ec5ca33b6507c45f966d83e`；CLI/MCP 候选为 `8abbd66bbd373c40bb4d33b916e88ab56fe09b0a`，已推送并回读确认。2026-11-26 补测已取得真实开发二进制并通过 CLI/MCP 集成测试；具体文件 SHA-256 见本轮 `.tmp/parity-20261125/manifest.json`。P1 剩余值域与配置覆盖仍待继续，整体 P1 尚未验收完成。2026-11-26 的 `auto-mode` 子阶段已完成原版契约实测、逐字节对比与真实二进制 8/8，见下文独立小节；P2 整体仍未完成。
 
 ## 测试结论
 
@@ -11,9 +11,10 @@
 | 大数与分隔符缺陷红绿重放 | 通过 | 隔离旧生产模块 46 通过、1 失败（safe integer 小数边界），修复后 47/47；保留旧模块与原始失败记录 |
 | 主库类型/借用检查 | 通过（实验编译参数） | `cargo check --locked --offline --lib` 退出 0；关闭 debug/incremental、使用独立 allocator/MIR 参数，只证明库检查，不证明可链接二进制或测试执行 |
 | 五个集成测试目标类型/借用检查 | 通过（仅编译检查） | 候选 `8abbd66` 上 `cli_value_contract`、`mcp_serve`、`cli_parser_contract`、`doctor_cli`、`mcp_add_json` 的 `cargo check --test` 退出 0；没有执行这些测试 |
-| 完整本机二进制开发构建 | 通过（构建期临时 5G 上限） | Rust 1.88 主库构建退出 0，耗时 20m01s，峰值 RSS 5,077,244 KiB，未使用 swap；产物 `target/msrv-1.88/debug/cometix`，SHA-256 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`。3 GiB 在单态化阶段停滞/SIGKILL，4 GiB 仍被内存回收拖慢，5 GiB 才完成 |
+| 完整本机二进制开发构建 | 通过（构建期临时 5G 上限） | Rust 1.88 主库构建退出 0，耗时 20m01s，峰值 RSS 5,077,244 KiB，未使用 swap；3 GiB 在单态化阶段停滞/SIGKILL，4 GiB 仍被内存回收拖慢，5 GiB 才完成。该次产物 `target/msrv-1.88/debug/cometix` 的 SHA-256 为 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`；后续 auto-mode 测试重新链接后当前产物 SHA-256 为 `fb6b68df0e8dbdc375493fa491e8c21662245adb61e785da3e58dc863cd18876`，旧指纹已被覆盖 |
 | 真实 CLI 参数、doctor、Desktop/MCP 配置回归 | 通过 | 真实二进制与生产 parser 模块：`cli_parser_contract` 47/47、`cli_value_contract` 4/4、`doctor_cli` 3/3、`mcp_add_json` 35/35 |
 | stdio MCP 实际工具调用 | 通过 | `mcp_serve` 5/5：初始化、真实工具 schema、Read→Edit→Write→磁盘回读、未知工具/非法输入后 ping、取消并回收 shell、EOF 回收 shell；stdout 仅协议 |
+| auto-mode 本地管理命令 | 通过（真实二进制） | `tests/auto_mode_cli.rs` 8/8；`defaults`、`--label`、`config`（含 `$defaults`、`hard_deny`、`--settings`）与原版 2.1.332 逐字节一致；`reset` 的文件副作用、确认与非法 JSON 边界通过。`critique` 只验证了无自定义规则时不发起模型调用，真实模型链未验。见下文独立小节 |
 | 发布构建与原版性能比较 | 未执行 | 没有复刻版 release 产物，不给出产品提速结论 |
 
 ## 2026-11-26 真实二进制补测
@@ -80,6 +81,38 @@ GitHub 托管验证候选使用 `docs/ci/cli-parity.workflow.yml`（启用时复
 
 台架静态检查已检查 workflow YAML 和 shell/Python 语法；最初的隔离自检仅覆盖 0/42 两个受控退出码，随后补出并修复空目标、日志写入失败两处误报成功。`python3 scripts/check-ci-harness.py` 现覆盖成功、测试失败、空目标、日志失败、两者同时失败共五个场景，目标枚举、退出码、产物哈希及临时目录清理均通过。这不是产品测试。`mcp.rs` 已通过 rustfmt 检查；`auto_compact.rs` 仍保留继承的格式差异，不做整文件重排。
 
+## 2026-11-26 auto-mode 子阶段
+
+本轮以本机原版 `2.1.332` 为 oracle，实现 `auto-mode defaults|config|reset|critique` 的 shell 入口，并把 `autoMode.hard_deny` 接入设置 schema、自动模式规则合并与分类器提示词。
+
+### 已通过
+
+- `defaults`：默认输出与冻结规则资产逐字节一致，SHA-256 `f1c7f88ce92fdc5577e08df3b5542579f096231bf2dfcf67f0823811d474e965`，82,359 字节；计数 allow 16 / soft_deny 72 / hard_deny 1 / environment 21。`--label git`、`--label=Data`、`--label Browser`、`--label zzz` 的输出与原版逐字节一致。标签过滤按原版去掉 `*`、去掉 `[...]`、转小写并截到第一个 `:` 或 `[`。
+- `config`：无配置时输出完整默认规则；自定义数组替换默认；`"$defaults"` 只在首次出现处展开一次；空数组等同未设置；只有 `userSettings` / `flagSettings` / `policySettings` 参与合并，project/local 设置被忽略。含自定义 allow/hard_deny 的对比输出 SHA-256 `5706e4798f0ea4a7c9badd0c48326c74699f0ec3fec1a710df65d81ba2a8a5b4`，与原版逐字节一致。
+- `--settings <file>`：修复早期 standalone 命令未发布 flag settings 路径的问题；`--settings flag.json auto-mode config` 的输出与原版逐字节一致，SHA-256 `1d4fec28e70504051aef38a1d20aa3133ece7383268a23307c239d4ca11d00f3`，两侧 stderr 均为空。
+- `reset`：无 `autoMode` 时不写文件并提示 already at defaults；有配置时打印各段条目数；无 `-y` 时接受 `y/yes`，`n` 或 EOF 输出 `Aborted.` 且 exit 1；非法 JSON 不写文件并报错；`-y/--yes` 只删除 `autoMode`，保留其他键，pretty JSON 加末尾换行。
+- 真实二进制测试：`tests/auto_mode_cli.rs` 8/8。最终排版后重编译加运行耗时 3m33.26s，峰值 RSS 5,374,880 KiB，无 swap；此前未排版版本的 `--no-run` 构建为 3m39.82s、5,448,160 KiB，两个版本的 8 项用例均通过。
+- 分类器：`AutoModeRules` 现在包含 `hard_deny`；默认规则从冻结资产加载并注入外部权限提示词；新槽位 `user_soft_deny_rules_to_replace` / `user_hard_deny_rules_to_replace` 接入，旧槽位继续兼容。
+
+### 已知差异与未验边界
+
+- 受影响的同进程 `cargo test --lib` 尝试在 5G cgroup 下编译到 `MIR_borrow_checking` 时被 SIGKILL，峰值 RSS 5,342,468 KiB、无 swap；这是 test harness 的资源上限，不是编译错误或断言失败。按本项目规则不把 `cargo test --lib` 当门禁，本批未提高内存上限；`tests/auto_mode_cli.rs` 的 8 个真实二进制用例与逐字节对比不受影响。
+- `reset` 在顶层键较多的设置文件中，原版会重排部分键：输入 `z, env, autoMode, a, theme` 时原版输出顺序为 `env, theme, z, a`，复刻版为 `env, z, a, theme`。两者 JSON 语义一致、`autoMode` 都被移除、其余值都保留；差异继承自通用 settings writer，本批不为单一命令改全局写入器。
+- `critique` 只完成“无自定义规则时打印提示、不调用模型”的验证；有自定义规则时的真实 side query、模型选择、错误与超时未用真实账号链路验证，不能标为端到端完成。
+- 未执行 release 构建、原版/复刻版性能比较；debug 产物不能用于性能结论。
+
+复跑 auto-mode 真实二进制测试：
+
+```bash
+COMETIX_MEMORY_HIGH=5G COMETIX_MEMORY_MAX=5G \
+bash scripts/limited-run.sh bash -c '
+  export RUSTC_BOOTSTRAP=cometix_code
+  export RUSTC_WORKSPACE_WRAPPER="$PWD/.tmp/parity-20261125/compiler-msrv-threads1.sh"
+  export CARGO_TARGET_DIR="$PWD/target/msrv-1.88"
+  cargo +1.88.0 test --locked --offline --test auto_mode_cli -- --test-threads=1
+'
+```
+
 ## 缺陷与归因
 
 1. CLI 值参数曾用前缀匹配，误吞更长的未知参数；现限制为精确名或 `=value`。
@@ -90,6 +123,7 @@ GitHub 托管验证候选使用 `docs/ci/cli-parity.workflow.yml`（启用时复
 6. 3 GiB/4 GiB 构建失败已归因于单体主库单态化工作集和软上限内存回收，不是源码编译错误；5 GiB 下同一源码和编译参数退出 0。该修复不改变 release 构建与性能比较仍未执行的结论。
 7. CI 台架补测发现 Bash 在无匹配项时会保留 `tests/*.rs` 字面量，以及 `tee` 失败会被只取测试退出码的逻辑掩盖。修复分别启用 `nullglob`、保存管道各段状态并优先保留测试失败；红例见 `ci-script-edges-red-1.json`，修复后五个场景见 `ci-script-edges-green-1.json`。
 8. `mcp serve` 的第一版候选缺少进程生命周期 runtime 发布，插件加载后台任务会 panic；同时 `current_thread` runtime 被同步 Bash 工具阻塞，取消通知和 EOF 无法及时处理。已改为双 worker runtime、独立工具任务加 abort controller，并在 stdio EOF 时主动取消会话；`mcp_serve` 5/5 复测通过。
+9. 早期 standalone 的 `auto-mode config/reset` 在 `main::run` 安装 flag source 之前读取设置，实际不读 `--settings`；现已在 dispatch 的早期命令分发前发布 flag settings 路径，并补真实二进制用例。
 
 MCP 候选复用现有工具注册表、schema 校验和执行实现，共享文件读取状态，串行执行工具；stdout 仅供协议。它提供当前 Cometix 注册表中的实际工具，不宣称与原版 22 项工具完全一致，不启动模型对话。依赖交互界面的工具不向 MCP host 广告。
 

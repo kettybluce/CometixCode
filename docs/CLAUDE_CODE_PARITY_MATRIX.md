@@ -128,11 +128,11 @@
 
 | 命令组 | 必须实现的子命令 | 当前状态 |
 |---|---|---|
-| `mcp` | `add`, `add-from-claude-desktop`, `add-json`, `get`, `list`, `login`, `logout`, `remove`, `reset-project-choices`, `serve` | `add`、`add-from-claude-desktop`、`add-json`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices` 已覆盖核心来源/行为并有真实二进制测试；`login/logout` 的 HTTP OAuth loopback fixture 覆盖 discovery、手工回调、token 持久化、撤销和幂等清理，真实第三方服务、SSE、claude.ai connector、Mac Keychain 尚未在本机验收。`add-from-claude-desktop` 实现了官方 scope 解析、macOS/WSL 路径定位（含 `%USERPROFILE%` 映射与 `/mnt/c/Users` 扫描）、`mcpServers` 读取、重名编号后缀与按 scope 导入；headless CLI 直接全量导入并回报结果，交互式多选由已有 `MCPServerDesktopImportDialog` 覆盖。Mac/WSL 真机导入未在本机验收（原生 Windows 正确返回官方不支持提示）。`serve` 已接入候选：初始化、真实工具调用、错误恢复、取消/EOF 共 5 个二进制用例待执行，当前不计已实现 |
+| `mcp` | `add`, `add-from-claude-desktop`, `add-json`, `get`, `list`, `login`, `logout`, `remove`, `reset-project-choices`, `serve` | `add`、`add-from-claude-desktop`、`add-json`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices` 已覆盖核心来源/行为并有真实二进制测试；`login/logout` 的 HTTP OAuth loopback fixture 覆盖 discovery、手工回调、token 持久化、撤销和幂等清理，真实第三方服务、SSE、claude.ai connector、Mac Keychain 尚未在本机验收。`add-from-claude-desktop` 实现了官方 scope 解析、macOS/WSL 路径定位（含 `%USERPROFILE%` 映射与 `/mnt/c/Users` 扫描）、`mcpServers` 读取、重名编号后缀与按 scope 导入；headless CLI 直接全量导入并回报结果，交互式多选由已有 `MCPServerDesktopImportDialog` 覆盖。Mac/WSL 真机导入未在本机验收（原生 Windows 正确返回官方不支持提示）。`serve` 已通过 5/5 真实二进制用例（初始化、真实工具调用、错误恢复、取消/EOF），stdout 仅协议；工具清单仍不等同于原版全部 22 项 |
 | `plugin`/`plugins` | `configure`, `details`, `disable`, `enable`, `eval`, `init/new`, `install/i`, `list`, `marketplace`, `prune/autoremove`, `restore-set-aside`, `tag`, `test`, `uninstall/remove`, `update`, `validate` | 交互 UI/loader 存在，顶层 CLI 全部缺失 |
 | `auth` | `login`, `logout`, `status` | 交互命令存在，顶层 CLI 缺失 |
 | `agents` | `--json`, `--all`, `--cwd`、派发默认参数 | agent/task 数据结构有，agent view/JSON shell 入口缺失 |
-| `auto-mode` | `config`, `critique`, `defaults`, `reset` | 缺失 |
+| `auto-mode` | `config`, `critique`, `defaults`, `reset` | 已实现：`defaults` 与冻结原版规则逐字节一致（allow 16 / soft_deny 72 / hard_deny 1 / environment 21），`--label` 过滤一致；`config` 只合并 user/flag/policy 来源，支持 `$defaults`、空数组和 `--settings`，与原版逐字节一致；`reset` 只删除 `autoMode`，确认、`-y`、非法 JSON 边界通过。真实二进制 8/8。已知差异：多顶层键文件的 reset 键顺序不同，JSON 语义一致；`critique` 仅验证无自定义规则时不调用模型，真实模型 side query 未验 |
 | `doctor` | 安装、settings、Remote Control、OTel 只读诊断 | 顶层 CLI 已接入：复用 `utils/doctor_diagnostic` 与交互 `/doctor` 共享的数据模型，打印安装类型/版本/平台/路径/搜索/自动更新/问题清单文本报告，有真实二进制测试。远程策略、OTel、安装修复等需网络或副作用的项目未覆盖 |
 | `gateway` | `--config` 企业 gateway 进程 | 缺失 |
 | `import` | `codex/gemini/cursor`, `--dry-run`, `--yes` | 缺失 |
@@ -190,12 +190,12 @@ stdio、SSE、streamable HTTP、WebSocket、OAuth、elicitation、MCP resources/
 
 ### 4.2 缺失
 
-- 顶层 `mcp serve` 已接入候选，但尚未取得完整构建/真实协议验收结果；`add`、`add-from-claude-desktop`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices`、`add-json` 已接入并有真实二进制测试。`get/list/login/logout` 当前对 plugin/managed/claude.ai/dynamic 来源仍需按官方 scope 再核，不能据核心来源测试宣称完全对齐。
+- 顶层 `mcp serve` 已通过真实二进制 5/5：初始化、真实工具 schema、Read→Edit→Write→磁盘回读、未知工具/非法输入后 ping、取消并回收 shell、EOF 回收 shell；stdout 仅协议。`add`、`add-from-claude-desktop`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices`、`add-json` 已接入并有真实二进制测试。`get/list/login/logout` 当前对 plugin/managed/claude.ai/dynamic 来源仍需按官方 scope 再核，不能据核心来源测试宣称完全对齐。
 - MCP resources 转 skill/command 的 producer（当前 feature flag 读取不到真实 MCP skills）。
 - MCP server 登录退出已接入标准 OAuth CLI 路径，HTTP loopback fixture 已验证；真实第三方兼容、SSE、connector、XAA、plugin/managed/claude.ai 来源与企业设置边界仍需继续对照。
 - `add-from-claude-desktop` 已接入 scope/平台检测/路径定位/重名后缀逻辑；Mac/WSL 真机 Desktop config 导入尚未在本机验收（原生 Windows 只验证了不支持提示）。
 - claude.ai connector OAuth 的完整 CLI flow，以及标准 OAuth 的更多服务端边界（动态注册、OAuth 410、跨平台密钥链）。
-- MCP server `serve` 的 stdin/stdout server mode 候选需完成真实二进制验收；工具清单暂不等同于原版全部 22 项。
+- MCP server `serve` 的 stdin/stdout server mode 已通过 5 个真实二进制用例；工具清单暂不等同于原版全部 22 项，依赖交互界面的工具不向 MCP host 广告。
 - `mcp_auth_tool` 对 stdio 认证仍是 `Unsupported`，需与官方认证范围明确分支。
 
 代码证据：`src/commands/mcp.rs`、`src/services/mcp/client.rs`、`src/services/mcp/use_manage_mcp_connections.rs`、`src/utils/feature_flags.rs:419`、`src/tools/mcp_auth_tool/mod.rs`。
@@ -297,8 +297,8 @@ Hook event enum 已覆盖 `SessionStart/Setup/SessionEnd/UserPromptSubmit/PreToo
 按依赖和可本地验收程度排序：
 
 1. CLI parser/help/dispatch：先补新参数的严格解析、值域和错误边界，避免 typo 被 `starts_with` 静默接受。
-2. MCP shell 子命令：已完成 `list/get/remove/add/login/logout/reset-project-choices/add-json/add-from-claude-desktop`；继续实现 `serve`，每个命令独立测试和提交。
-3. Auth/auto-mode/install/import/purge 等本地无云依赖命令（`doctor` 已完成）。
+2. MCP shell 子命令：已完成 `list/get/remove/add/login/logout/reset-project-choices/add-json/add-from-claude-desktop` 与 `serve` 5/5；每个命令独立测试和提交。
+3. Auth/install/import/purge 等本地无云依赖命令（`doctor`、`auto-mode` 已完成）。
 4. Plugin shell 管理面和 marketplace 本地操作。
 5. session-id/fork/name、worktree/tmux、background supervisor/agent view。
 6. hooks/structured stream、settings schema、permission/sandbox 完整字段。

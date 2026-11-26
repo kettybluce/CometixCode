@@ -88,6 +88,13 @@ pub fn dispatch(config: &CliConfig) -> Option<i32> {
     }
     apply_live_env_side_effects(config);
 
+    // Early standalone commands read settings before `main::run` installs the
+    // flag source. Publish `--settings` here so `auto-mode config/reset` and
+    // the MCP/doctor paths see the same trusted source they would in a session.
+    if let Some(path) = &config.settings {
+        crate::bootstrap::state::set_flag_settings_path(Some(path.clone()));
+    }
+
     if config.show_version {
         println!("{VERSION} (Claude Code)");
         return Some(0);
@@ -119,6 +126,12 @@ pub fn dispatch(config: &CliConfig) -> Option<i32> {
     // standalone CLI path that never opens the interactive TUI.
     if config.subcommand.as_deref() == Some("doctor") {
         return crate::commands::doctor::maybe_run_doctor_cli(&config.argv);
+    }
+
+    // Auto mode's local management commands own their stdout/stderr and are
+    // intentionally separate from the interactive launch path.
+    if config.subcommand.as_deref() == Some("auto-mode") {
+        return crate::commands::auto_mode::maybe_run_auto_mode_cli(&config.argv);
     }
 
     // Preserve historical ant-only / feature-gated messaging where useful,

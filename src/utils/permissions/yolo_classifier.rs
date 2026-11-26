@@ -38,6 +38,7 @@ const ANTHROPIC_PERMISSIONS_TEMPLATE: &str = "";
 pub struct AutoModeRules {
     pub allow: Vec<String>,
     pub soft_deny: Vec<String>,
+    pub hard_deny: Vec<String>,
     pub environment: Vec<String>,
 }
 /// Maps to: CC `yoloClassifier.ts:288-290` `TranscriptBlock`.
@@ -124,43 +125,125 @@ fn is_using_external_permissions() -> bool {
     .force_external_permissions
         == Some(true)
 }
+/// CC `yoloClassifier.ts` uses this sentinel inside an array to splice the
+/// shipped defaults into a custom rule list.
+pub const AUTO_MODE_DEFAULTS_SENTINEL: &str = "$defaults";
+
+/// The complete external default rule set is a frozen reference asset from
+/// Claude Code 2.1.332. Keeping it as data avoids silently drifting the
+/// `auto-mode defaults` command away from the classifier prompt.
+const EXTERNAL_DEFAULT_RULES_JSON: &str =
+    include_str!("yolo_classifier_prompts/auto_mode_defaults.json");
+
 /// Maps to: CC `yoloClassifier.ts:100-106` `getDefaultExternalAutoModeRules`.
 pub fn get_default_external_auto_mode_rules() -> AutoModeRules {
-    AutoModeRules {
-        allow: extract_tagged_bullets("user_allow_rules_to_replace"),
-        soft_deny: extract_tagged_bullets("user_deny_rules_to_replace"),
-        environment: extract_tagged_bullets("user_environment_to_replace"),
-    }
+    static RULES: std::sync::LazyLock<AutoModeRules> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(EXTERNAL_DEFAULT_RULES_JSON)
+            .expect("frozen external auto-mode defaults must be valid JSON")
+    });
+    RULES.clone()
 }
+
 /// Maps to: CC `yoloClassifier.ts:108-118` `extractTaggedBullets`.
-fn extract_tagged_bullets(tag: &str) -> Vec<String> {
+fn extract_tagged_bullets(template: &str, tag: &str) -> Vec<String> {
     let re = regex::Regex::new(&format!(r"<{tag}>([\s\S]*?)</{tag}>")).expect("fixed source tag");
-    re.captures(EXTERNAL_PERMISSIONS_TEMPLATE)
+    re.captures(template)
         .map(|m| {
-            m[1].split('\n')
-                .map(str::trim)
-                .filter_map(|line| line.strip_prefix("- ").map(str::to_owned))
-                .collect()
+            let mut values = Vec::new();
+            for line in m[1].split('\n') {
+                let line = line.trim_end();
+                if let Some(value) = line.strip_prefix("- ") {
+                    values.push(value.to_owned());
+                } else if !line.trim().is_empty()
+                    && let Some(last) = values.last_mut()
+                {
+                    last.push('\n');
+                    last.push_str(line);
+                }
+            }
+            values
         })
         .unwrap_or_default()
 }
+
+/// Maps to: CC `Czr` (`$defaults` splice). An empty/absent custom section
+/// means the defaults are in effect; otherwise the custom list replaces them,
+/// with `$defaults` expanding at its first occurrence.
+pub fn resolve_auto_mode_rules(
+    custom: Option<Vec<String>>,
+    defaults: &[String],
+) -> Vec<String> {
+    let Some(custom) = custom.filter(|values| !values.is_empty()) else {
+        return defaults.to_vec();
+    };
+    let mut resolved = Vec::new();
+    let mut expanded = false;
+    for value in custom {
+        if value == AUTO_MODE_DEFAULTS_SENTINEL {
+            if !expanded {
+                resolved.extend(defaults.iter().cloned());
+                expanded = true;
+            }
+        } else {
+            resolved.push(value);
+        }
+    }
+    resolved
+}
+
+fn replace_rule_slot(prompt: String, tag: &str, values: &[String]) -> String {
+    let pattern = format!(
+        r"(?s)<{}>.*?</{}>",
+        regex::escape(tag),
+        regex::escape(tag)
+    );
+    let re = regex::Regex::new(&pattern).expect("fixed source tag");
+    if !re.is_match(&prompt) {
+        return prompt;
+    }
+    let content = values
+        .iter()
+        .map(|value| format!("- {value}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    re.replace(&prompt, |_: &regex::Captures<'_>| {
+        format!("<{tag}>\n{content}\n</{tag}>")
+    })
+    .into_owned()
+}
+
+fn apply_rule_slots(prompt: String, rules: &AutoModeRules) -> String {
+    let prompt = replace_rule_slot(
+        prompt,
+        "user_allow_rules_to_replace",
+        &rules.allow,
+    );
+    let prompt = replace_rule_slot(
+        prompt,
+        "user_soft_deny_rules_to_replace",
+        &rules.soft_deny,
+    );
+    // Several internal templates still carry the pre-2.1.136 slot name.
+    let prompt = replace_rule_slot(prompt, "user_deny_rules_to_replace", &rules.soft_deny);
+    let prompt = replace_rule_slot(
+        prompt,
+        "user_hard_deny_rules_to_replace",
+        &rules.hard_deny,
+    );
+    replace_rule_slot(
+        prompt,
+        "user_environment_to_replace",
+        &rules.environment,
+    )
+}
+
 /// Maps to: CC `yoloClassifier.ts:125-142` `buildDefaultExternalSystemPrompt`.
 pub fn build_default_external_system_prompt() -> String {
-    let mut prompt =
+    let prompt =
         BASE_SYSTEM_PROMPT.replacen("<permissions_template>", EXTERNAL_PERMISSIONS_TEMPLATE, 1);
-    for tag in [
-        "user_allow_rules_to_replace",
-        "user_deny_rules_to_replace",
-        "user_environment_to_replace",
-    ] {
-        let re =
-            regex::Regex::new(&format!(r"<{tag}>([\s\S]*?)</{tag}>")).expect("fixed source tag");
-        prompt = re
-            .replace(&prompt, |m: &regex::Captures<'_>| m[1].to_owned())
-            .into_owned();
-    }
-    prompt
+    apply_rule_slots(prompt, &get_default_external_auto_mode_rules())
 }
+
 /// Maps to: CC `yoloClassifier.ts:484-540` `buildYoloSystemPrompt`.
 pub fn build_yolo_system_prompt(context: &ToolPermissionContext) -> String {
     let using_external = is_using_external_permissions();
@@ -169,7 +252,29 @@ pub fn build_yolo_system_prompt(context: &ToolPermissionContext) -> String {
     } else {
         ANTHROPIC_PERMISSIONS_TEMPLATE
     };
-    let mut prompt = BASE_SYSTEM_PROMPT.replacen("<permissions_template>", template, 1);
+    let prompt = BASE_SYSTEM_PROMPT.replacen("<permissions_template>", template, 1);
+    let defaults = if using_external {
+        get_default_external_auto_mode_rules()
+    } else {
+        AutoModeRules {
+            allow: extract_tagged_bullets(template, "user_allow_rules_to_replace"),
+            soft_deny: extract_tagged_bullets(template, "user_soft_deny_rules_to_replace")
+                .into_iter()
+                .chain(extract_tagged_bullets(
+                    template,
+                    "user_deny_rules_to_replace",
+                ))
+                .collect(),
+            hard_deny: extract_tagged_bullets(
+                template,
+                "user_hard_deny_rules_to_replace",
+            ),
+            environment: extract_tagged_bullets(
+                template,
+                "user_environment_to_replace",
+            ),
+        }
+    };
     let auto_mode = crate::utils::settings::get_auto_mode_config();
     // The sole source bashClassifier.ts is an external disabled stub; keep its
     // real empty-list results, never manufacture internal prompt rules.
@@ -178,42 +283,43 @@ pub fn build_yolo_system_prompt(context: &ToolPermissionContext) -> String {
     } else {
         super::bash_classifier::get_bash_prompt_allow_descriptions(context)
     };
-    let mut deny = if using_external {
+    let mut soft_deny = if using_external {
         vec![]
     } else {
         super::bash_classifier::get_bash_prompt_deny_descriptions(context)
     };
     if !using_external && has_internal_capability(InternalCapability::Permissions) {
-        deny.extend(POWERSHELL_DENY_GUIDANCE.iter().map(|s| (*s).to_owned()));
+        soft_deny.extend(POWERSHELL_DENY_GUIDANCE.iter().map(|s| (*s).to_owned()));
     }
-    let mut environment = Vec::new();
+    let hard_deny = if let Some(config) = &auto_mode {
+        resolve_auto_mode_rules(config.hard_deny.clone(), &defaults.hard_deny)
+    } else {
+        defaults.hard_deny.clone()
+    };
+    let environment = if let Some(config) = &auto_mode {
+        resolve_auto_mode_rules(config.environment.clone(), &defaults.environment)
+    } else {
+        defaults.environment.clone()
+    };
     if let Some(config) = auto_mode {
-        allow.extend(config.allow.unwrap_or_default());
-        deny.extend(config.soft_deny.unwrap_or_default());
-        environment = config.environment.unwrap_or_default();
+        allow.extend(resolve_auto_mode_rules(config.allow, &defaults.allow));
+        soft_deny.extend(resolve_auto_mode_rules(
+            config.soft_deny,
+            &defaults.soft_deny,
+        ));
+    } else {
+        allow.extend(defaults.allow);
+        soft_deny.extend(defaults.soft_deny);
     }
-    for (tag, values) in [
-        ("user_allow_rules_to_replace", allow),
-        ("user_deny_rules_to_replace", deny),
-        ("user_environment_to_replace", environment),
-    ] {
-        let re =
-            regex::Regex::new(&format!(r"<{tag}>([\s\S]*?)</{tag}>")).expect("fixed source tag");
-        prompt = re
-            .replace(&prompt, |m: &regex::Captures<'_>| {
-                if values.is_empty() {
-                    m[1].to_owned()
-                } else {
-                    values
-                        .iter()
-                        .map(|v| format!("- {v}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
-            })
-            .into_owned();
-    }
-    prompt
+    apply_rule_slots(
+        prompt,
+        &AutoModeRules {
+            allow,
+            soft_deny,
+            hard_deny,
+            environment,
+        },
+    )
 }
 /// Maps to: CC `yoloClassifier.ts:144-146` `getAutoModeDumpDir`.
 fn get_auto_mode_dump_dir() -> std::path::PathBuf {
@@ -1447,10 +1553,38 @@ mod tests {
         assert!(prompt.contains("classify_result"));
         assert!(prompt.contains("Allow Rules") || prompt.contains("read-only"));
         let rules = get_default_external_auto_mode_rules();
-        assert!(!rules.allow.is_empty());
-        assert!(!rules.soft_deny.is_empty());
+        assert_eq!(rules.allow.len(), 16);
+        assert_eq!(rules.soft_deny.len(), 72);
+        assert_eq!(rules.hard_deny.len(), 1);
+        assert_eq!(rules.environment.len(), 21);
+        assert!(prompt.contains("Data Exfiltration"));
         assert_eq!(YOLO_CLASSIFIER_TOOL_NAME, "classify_result");
         assert!(get_auto_mode_classifier_error_dump_path().contains("auto-mode-classifier-errors"));
+    }
+
+    #[test]
+    fn auto_mode_rule_resolution_matches_defaults_sentinel_semantics() {
+        let defaults = vec!["default-a".to_string(), "default-b".to_string()];
+        assert_eq!(resolve_auto_mode_rules(None, &defaults), defaults);
+        assert_eq!(resolve_auto_mode_rules(Some(vec![]), &defaults), defaults);
+        assert_eq!(
+            resolve_auto_mode_rules(Some(vec!["custom".into()]), &defaults),
+            vec!["custom"]
+        );
+        assert_eq!(
+            resolve_auto_mode_rules(
+                Some(vec!["custom-a".into(), "$defaults".into(), "custom-b".into()]),
+                &defaults
+            ),
+            vec!["custom-a", "default-a", "default-b", "custom-b"]
+        );
+        assert_eq!(
+            resolve_auto_mode_rules(
+                Some(vec!["$defaults".into(), "$defaults".into()]),
+                &defaults
+            ),
+            defaults
+        );
     }
 
     use std::cell::RefCell;

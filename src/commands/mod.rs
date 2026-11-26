@@ -15,6 +15,7 @@
 pub mod add_dir;
 pub mod advisor;
 pub mod agents;
+pub mod auto_mode;
 pub mod branch;
 pub mod btw;
 pub mod clear;

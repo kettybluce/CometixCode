@@ -303,6 +303,8 @@ pub struct AutoModeSettings {
     pub allow: Option<Vec<String>>,
     #[serde(rename = "soft_deny")]
     pub soft_deny: Option<Vec<String>>,
+    #[serde(rename = "hard_deny")]
+    pub hard_deny: Option<Vec<String>>,
     pub deny: Option<Vec<String>>,
     pub environment: Option<Vec<String>>,
 }
@@ -1281,6 +1283,12 @@ pub fn settings_schema() -> &'static crate::utils::zod::Schema {
                     zod::array(zod::string())
                         .optional()
                         .describe("Rules for the auto mode classifier deny section"),
+                ),
+                (
+                    "hard_deny",
+                    zod::array(zod::string()).optional().describe(
+                        "Rules the auto mode classifier blocks unconditionally, regardless of user intent or allow exceptions",
+                    ),
                 ),
             ];
             if is_ant {

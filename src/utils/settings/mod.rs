@@ -351,10 +351,13 @@ pub fn get_auto_mode_config() -> Option<types::AutoModeSettings> {
     }
     let mut allow = Vec::new();
     let mut soft_deny = Vec::new();
+    let mut hard_deny = Vec::new();
     let mut environment = Vec::new();
+    // Only trusted sources may set classifier rules. Project and local
+    // settings are repo-controllable, so they are deliberately excluded even
+    // when enabled for ordinary settings resolution.
     for source in [
         SettingSource::User,
-        SettingSource::Local,
         SettingSource::Flag,
         SettingSource::Policy,
     ] {
@@ -365,17 +368,23 @@ pub fn get_auto_mode_config() -> Option<types::AutoModeSettings> {
         };
         allow.extend(auto_mode.allow.unwrap_or_default());
         soft_deny.extend(auto_mode.soft_deny.unwrap_or_default());
+        hard_deny.extend(auto_mode.hard_deny.unwrap_or_default());
         if crate::utils::build_profile::build_audience().is_internal() {
             soft_deny.extend(auto_mode.deny.unwrap_or_default());
         }
         environment.extend(auto_mode.environment.unwrap_or_default());
     }
-    if allow.is_empty() && soft_deny.is_empty() && environment.is_empty() {
+    if allow.is_empty()
+        && soft_deny.is_empty()
+        && hard_deny.is_empty()
+        && environment.is_empty()
+    {
         return None;
     }
     Some(types::AutoModeSettings {
         allow: (!allow.is_empty()).then_some(allow),
         soft_deny: (!soft_deny.is_empty()).then_some(soft_deny),
+        hard_deny: (!hard_deny.is_empty()).then_some(hard_deny),
         deny: None,
         environment: (!environment.is_empty()).then_some(environment),
     })
@@ -641,10 +650,8 @@ mod tests {
         let _reset = ResetCache;
         for (source, name) in [
             (SettingSource::User, "user"),
-            (SettingSource::Local, "local"),
             (SettingSource::Flag, "flag"),
             (SettingSource::Policy, "policy"),
-            (SettingSource::Project, "project"),
         ] {
             settings_cache::set_cached_settings_for_source(
                 source,
@@ -652,8 +659,24 @@ mod tests {
                     auto_mode: Some(types::AutoModeSettings {
                         allow: Some(vec![name.into(), "duplicate".into()]),
                         soft_deny: Some(vec![format!("{name}-soft")]),
+                        hard_deny: Some(vec![format!("{name}-hard")]),
                         deny: Some(vec![format!("{name}-legacy")]),
                         environment: Some(vec![format!("{name}-environment")]),
+                    }),
+                    ..Default::default()
+                }),
+            );
+        }
+        for source in [SettingSource::Project, SettingSource::Local] {
+            settings_cache::set_cached_settings_for_source(
+                source,
+                Some(SettingsJson {
+                    auto_mode: Some(types::AutoModeSettings {
+                        allow: Some(vec!["untrusted".into()]),
+                        soft_deny: Some(vec!["untrusted-soft".into()]),
+                        hard_deny: Some(vec!["untrusted-hard".into()]),
+                        deny: None,
+                        environment: Some(vec!["untrusted-environment".into()]),
                     }),
                     ..Default::default()
                 }),
@@ -672,8 +695,6 @@ mod tests {
             Some(vec![
                 "user".into(),
                 "duplicate".into(),
-                "local".into(),
-                "duplicate".into(),
                 "flag".into(),
                 "duplicate".into(),
                 "policy".into(),
@@ -681,25 +702,33 @@ mod tests {
             ])
         );
         let mut expected = Vec::new();
-        for name in ["user", "local", "flag", "policy"] {
+        for name in ["user", "flag", "policy"] {
             expected.push(format!("{name}-soft"));
             if crate::utils::build_profile::build_audience().is_internal() {
                 expected.push(format!("{name}-legacy"));
             }
         }
         assert_eq!(result.soft_deny, Some(expected));
+        assert_eq!(
+            result.hard_deny,
+            Some(vec![
+                "user-hard".into(),
+                "flag-hard".into(),
+                "policy-hard".into()
+            ])
+        );
         assert!(result.deny.is_none());
         assert_eq!(
             result.environment,
             Some(vec![
                 "user-environment".into(),
-                "local-environment".into(),
                 "flag-environment".into(),
                 "policy-environment".into()
             ])
         );
         for source in [
             SettingSource::User,
+            SettingSource::Project,
             SettingSource::Local,
             SettingSource::Flag,
             SettingSource::Policy,
