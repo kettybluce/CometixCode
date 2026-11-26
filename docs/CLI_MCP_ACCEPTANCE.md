@@ -1,6 +1,6 @@
 # CLI 与 MCP 候选验证记录（2026-11-25）
 
-目标原版：Claude Code 2.1.332。源基线：`58afa23c9f5141786ec5ca33b6507c45f966d83e`；CLI/MCP 候选为 `8abbd66bbd373c40bb4d33b916e88ab56fe09b0a`，已推送并回读确认。2026-11-26 补测已取得真实开发二进制并通过 CLI/MCP 集成测试；具体文件 SHA-256 见本轮 `.tmp/parity-20261125/manifest.json`。P1 剩余值域与配置覆盖仍待继续，整体 P1 尚未验收完成。2026-11-26 的 `auto-mode` 子阶段已完成原版契约实测、逐字节对比与真实二进制 8/8；`import` 的 2.1.332 未开放契约也已对齐（不宣称实际导入可用），见下文独立小节；P2 整体仍未完成。
+目标原版：Claude Code 2.1.332。源基线：`58afa23c9f5141786ec5ca33b6507c45f966d83e`；CLI/MCP 候选为 `8abbd66bbd373c40bb4d33b916e88ab56fe09b0a`，已推送并回读确认。2026-11-26 补测已取得真实开发二进制并通过 CLI/MCP 集成测试；具体文件 SHA-256 见本轮 `.tmp/parity-20261125/manifest.json`。P1 剩余值域与配置覆盖仍待继续，整体 P1 尚未验收完成。2026-11-26 的 `auto-mode` 子阶段已完成原版契约实测、逐字节对比与真实二进制 8/8；`import` 的 2.1.332 未开放契约也已对齐（不宣称实际导入可用）；`auth` 的只读状态与本地退出契约已完成真实二进制及原版对比，但真实 OAuth 登录和服务端撤销仍未开放。以上见下文独立小节；P2 整体仍未完成。
 
 ## 测试结论
 
@@ -11,11 +11,12 @@
 | 大数与分隔符缺陷红绿重放 | 通过 | 隔离旧生产模块 46 通过、1 失败（safe integer 小数边界），修复后 47/47；保留旧模块与原始失败记录 |
 | 主库类型/借用检查 | 通过（实验编译参数） | `cargo check --locked --offline --lib` 退出 0；关闭 debug/incremental、使用独立 allocator/MIR 参数，只证明库检查，不证明可链接二进制或测试执行 |
 | 五个集成测试目标类型/借用检查 | 通过（仅编译检查） | 候选 `8abbd66` 上 `cli_value_contract`、`mcp_serve`、`cli_parser_contract`、`doctor_cli`、`mcp_add_json` 的 `cargo check --test` 退出 0；没有执行这些测试 |
-| 完整本机二进制开发构建 | 通过（构建期临时 5G 上限） | Rust 1.88 主库构建退出 0，耗时 20m01s，峰值 RSS 5,077,244 KiB，未使用 swap；3 GiB 在单态化阶段停滞/SIGKILL，4 GiB 仍被内存回收拖慢，5 GiB 才完成。该次产物 `target/msrv-1.88/debug/cometix` 的 SHA-256 为 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`；后续 auto-mode/import 测试重新链接后当前产物 SHA-256 为 `63f925baef2c7b016cb733e21019065a9f32005edcc13bcffeddd30b58b91fb1`，旧指纹已被覆盖 |
+| 完整本机二进制开发构建 | 通过（构建期临时 5G 上限） | Rust 1.88 主库构建退出 0，耗时 20m01s，峰值 RSS 5,077,244 KiB，未使用 swap；3 GiB 在单态化阶段停滞/SIGKILL，4 GiB 仍被内存回收拖慢，5 GiB 才完成。该次产物 `target/msrv-1.88/debug/cometix` 的 SHA-256 为 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`；后续 auto-mode/import/auth 测试重新链接后当前产物 SHA-256 为 `addfc7ab53c686b6770adffbf2f68ad98a19a945df1a4bca8d3fc9208f515ee1`，旧指纹已被覆盖 |
 | 真实 CLI 参数、doctor、Desktop/MCP 配置回归 | 通过 | 真实二进制与生产 parser 模块：`cli_parser_contract` 47/47、`cli_value_contract` 4/4、`doctor_cli` 3/3、`mcp_add_json` 35/35 |
 | stdio MCP 实际工具调用 | 通过 | `mcp_serve` 5/5：初始化、真实工具 schema、Read→Edit→Write→磁盘回读、未知工具/非法输入后 ping、取消并回收 shell、EOF 回收 shell；stdout 仅协议 |
 | auto-mode 本地管理命令 | 通过（真实二进制） | `tests/auto_mode_cli.rs` 8/8；`defaults`、`--label`、`config`（含 `$defaults`、`hard_deny`、`--settings`）与原版 2.1.332 逐字节一致；`reset` 的文件副作用、确认与非法 JSON 边界通过。`critique` 只验证了无自定义规则时不发起模型调用，真实模型链未验。见下文独立小节 |
 | import CLI 契约 | 通过（真实二进制） | 原版 2.1.332 的 `import` 本身未开放；`tests/import_cli.rs` 5/5 对齐帮助、unavailable 文案、未知选项与 `--` 边界，且不写 settings。不是实际导入实现 |
+| auth CLI 契约 | 通过（真实二进制与逐字节对比） | `tests/auth_cli.rs` 11/11；`status` 的 JSON/文本、`--settings`、凭据来源和退出码通过；`logout` 的本地删除、离线未确认撤销文案及 `--json` 通过；`login` 帮助与参数冲突通过，真实 OAuth 登录仍关闭。57 个隔离场景与原版 2.1.332 的 stdout/stderr/退出码全部一致。见下文独立小节 |
 | 发布构建与原版性能比较 | 未执行 | 没有复刻版 release 产物，不给出产品提速结论 |
 
 ## 2026-11-26 真实二进制补测
@@ -131,6 +132,41 @@ bash scripts/limited-run.sh bash -c '
 - `tests/import_cli.rs` 5/5；另用 17 组命令对原版与复刻版做 stdout/stderr/退出码对比（仅把 `claude` 归一化为 `cometix`），17/17 一致。合并 import+auto-mode 的真实二进制重编译加运行耗时 3m47.14s，峰值 RSS 5,363,012 KiB，无 swap。
 - 注册 `import` subcommand 后复跑纯 parser 合约 47/47，既有参数解析未回归。
 - 测试确认不创建 `settings.json`。边界：原版没有可执行的导入逻辑，因此本阶段没有 codex/gemini/cursor 配置实际导入结果，也不宣称该集成可用。
+
+## 2026-11-26 auth 子阶段
+
+本轮接入 `auth status|logout|login` 的 shell 入口，并把 `auth` 从全局未实现保护移到已实现命令区。没有打开账户 OAuth 写入、刷新或浏览器登录总闸。
+
+### 已通过
+
+- `auth status`：默认 JSON，支持 `--json` 与 `--text`，`--text` 在两者同时出现时优先；固定字段顺序、条件字段、项目目录/配置目录、登录过期时间、`forceLoginMethod`、`consoleProfileSignInOffered` 以及账号邮箱/组织/订阅信息按原版输出。登录时 exit 0，未登录时仍输出状态并 exit 1。
+- `status` 覆盖 API key、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、本地 OAuth 凭据、`apiKeyHelper` 来源识别，以及 Bedrock/Vertex/Foundry。`apiKeyHelper` 在 `status` 中只识别来源，不执行 helper；隔离用例确认没有 `helper-ran` 文件副作用。
+- `auth logout`：新增仅删除本地凭据的安全存储出口，不启用账户凭据写入/刷新。存在 OAuth 凭据时执行本地删除并输出原版的“未能确认服务端撤销”文案，`--json` 额外带 `revokeUrl`；无凭据时输出成功文案。复刻版离线运行，不发起服务端撤销请求。
+- `auth login`：`--claudeai`、`--console`、`--email`、`--sso` 及隐藏参数 `--gateway-json`、`--organization-gateway`、`--ldr` 的帮助、互斥和错误文案已对齐。浏览器 OAuth 仍关闭，实际执行明确返回 `OAuth login is unavailable in this build (credential side effects are disabled).` 并 exit 1，不虚构登录成功。
+- `--settings`：共享入口补齐文件不存在、目录 `EISDIR`、非普通文件与读取失败错误；`auth` 前后置 `--settings` 均由真实二进制覆盖。
+- 子命令帮助优先级已对齐，包括 `--nope --help`、`help status extra` 与 `-- --help` 边界。
+- `tests/auth_cli.rs` 11/11。另以隔离 HOME/config/cwd 运行原版 2.1.332 与复刻版，覆盖 plain、OAuth 文件、API key、helper、force-login、Bedrock、Vertex、Foundry、base URL 等 57 个场景；归一化仅替换临时根目录与命令名，stdout/stderr/退出码 57/57 一致，无 FAIL。证据为 `.tmp/parity-20261125/evidence/auth-compare-final.log`。
+
+### 已知差异与未验边界
+
+- `auth logout` 有凭据时，原版会尝试网络撤销；复刻版明确离线报告“未能确认撤销”，没有真实撤销网络调用。
+- 原版首次运行会生成 `.claude.json` 与 backup，复刻版 `status/logout` 不做该启动副作用；stdout/stderr/退出码一致，文件副作用不同。
+- `auth login` 只完成帮助、参数和关闭门禁契约，不是真实 OAuth 登录；真实回调、token 写入、刷新与组织 gateway 流程未验。
+- `status` 尚未覆盖 gateway/hybrid、`allowedProviders` 等所有扩展字段；原版专属账号/服务字段没有可用真实账号链验证。
+- 未执行 release 构建、原版/复刻版性能比较；debug 产物不能用于性能结论。
+
+复跑 auth 真实二进制测试：
+
+```bash
+COMETIX_MEMORY_HIGH=5G COMETIX_MEMORY_MAX=5G \
+bash scripts/limited-run.sh bash -c '
+  export PATH="$HOME/.cargo/bin:$PATH"
+  export RUSTC_BOOTSTRAP=cometix_code
+  export RUSTC_WORKSPACE_WRAPPER="$PWD/.tmp/parity-20261125/compiler-msrv-threads1.sh"
+  export CARGO_TARGET_DIR="$PWD/target/msrv-1.88"
+  cargo +1.88.0 test --locked --offline --test auth_cli -- --test-threads=1
+'
+```
 
 ## 缺陷与归因
 

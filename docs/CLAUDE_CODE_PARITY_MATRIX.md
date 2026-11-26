@@ -41,7 +41,7 @@
 当前仓库已经有较完整的本地 TUI、基础 Agent loop、文件/命令工具、MCP runtime、权限、hooks、skills、插件加载和部分团队任务实现；但与 `2.1.329` 的一比一行为仍有大块缺口。最明显的缺口不是单个 MCP 命令，而是：
 
 1. 顶层 CLI 仍有大量新参数和子命令未接入。
-2. `mcp`、`plugin`、`auth`、后台 agent 管理等 shell 子命令没有完整实现。
+2. `auth` 的真实 OAuth 登录/撤销，以及 `plugin`、后台 agent 管理等 shell 子命令没有完整实现。
 3. 新版 bundled skills、dynamic workflows、cloud/Remote Control、background supervisor、worktree/tmux、sandbox policy 仍是局部路径或空实现。
 4. settings schema 只有约 91 个 Rust 顶层字段，而官方设置参考已超过 249 个条目；字段数量不是完成度指标，但可以直接证明配置面尚未一比一覆盖。
 5. 仓库内仍有明确的 `TODO(parity)`、`TODO(port)`、`not ported`、`generated-stub` 和 safe-stub 代码，必须逐项关闭或明确标注关闭原因。
@@ -130,7 +130,7 @@
 |---|---|---|
 | `mcp` | `add`, `add-from-claude-desktop`, `add-json`, `get`, `list`, `login`, `logout`, `remove`, `reset-project-choices`, `serve` | `add`、`add-from-claude-desktop`、`add-json`、`get`、`list`、`login`、`logout`、`remove`、`reset-project-choices` 已覆盖核心来源/行为并有真实二进制测试；`login/logout` 的 HTTP OAuth loopback fixture 覆盖 discovery、手工回调、token 持久化、撤销和幂等清理，真实第三方服务、SSE、claude.ai connector、Mac Keychain 尚未在本机验收。`add-from-claude-desktop` 实现了官方 scope 解析、macOS/WSL 路径定位（含 `%USERPROFILE%` 映射与 `/mnt/c/Users` 扫描）、`mcpServers` 读取、重名编号后缀与按 scope 导入；headless CLI 直接全量导入并回报结果，交互式多选由已有 `MCPServerDesktopImportDialog` 覆盖。Mac/WSL 真机导入未在本机验收（原生 Windows 正确返回官方不支持提示）。`serve` 已通过 5/5 真实二进制用例（初始化、真实工具调用、错误恢复、取消/EOF），stdout 仅协议；工具清单仍不等同于原版全部 22 项 |
 | `plugin`/`plugins` | `configure`, `details`, `disable`, `enable`, `eval`, `init/new`, `install/i`, `list`, `marketplace`, `prune/autoremove`, `restore-set-aside`, `tag`, `test`, `uninstall/remove`, `update`, `validate` | 交互 UI/loader 存在，顶层 CLI 全部缺失 |
-| `auth` | `login`, `logout`, `status` | 交互命令存在，顶层 CLI 缺失 |
+| `auth` | `login`, `logout`, `status` | 本地 shell 已接入：`status` 的 JSON/文本、凭据来源、`--settings` 和退出码通过；`logout` 只执行本地凭据删除，离线输出原版“服务端撤销未确认”及 `revokeUrl`，不发起真实撤销；`login` 只完成帮助、参数互斥与关闭门禁文案，真实浏览器 OAuth/token 写入未执行。`auth_cli` 11/11，原版隔离场景 57/57 的 stdout/stderr/退出码一致；首次运行文件副作用和完整 gateway/hybrid 字段仍有差异 |
 | `agents` | `--json`, `--all`, `--cwd`、派发默认参数 | agent/task 数据结构有，agent view/JSON shell 入口缺失 |
 | `auto-mode` | `config`, `critique`, `defaults`, `reset` | 已实现：`defaults` 与冻结原版规则逐字节一致（allow 16 / soft_deny 72 / hard_deny 1 / environment 21），`--label` 过滤一致；`config` 只合并 user/flag/policy 来源，支持 `$defaults`、空数组和 `--settings`，与原版逐字节一致；`reset` 只删除 `autoMode`，确认、`-y`、非法 JSON 边界通过。真实二进制 8/8。已知差异：多顶层键文件的 reset 键顺序不同，JSON 语义一致；`critique` 仅验证无自定义规则时不调用模型，真实模型 side query 未验 |
 | `doctor` | 安装、settings、Remote Control、OTel 只读诊断 | 顶层 CLI 已接入：复用 `utils/doctor_diagnostic` 与交互 `/doctor` 共享的数据模型，打印安装类型/版本/平台/路径/搜索/自动更新/问题清单文本报告，有真实二进制测试。远程策略、OTel、安装修复等需网络或副作用的项目未覆盖 |
@@ -298,7 +298,7 @@ Hook event enum 已覆盖 `SessionStart/Setup/SessionEnd/UserPromptSubmit/PreToo
 
 1. CLI parser/help/dispatch：先补新参数的严格解析、值域和错误边界，避免 typo 被 `starts_with` 静默接受。
 2. MCP shell 子命令：已完成 `list/get/remove/add/login/logout/reset-project-choices/add-json/add-from-claude-desktop` 与 `serve` 5/5；每个命令独立测试和提交。
-3. Auth/install/import/purge 等本地无云依赖命令（`doctor`、`auto-mode` 已完成）。
+3. Auth/install/import/purge 等本地无云依赖命令（`doctor`、`auto-mode`、`import` 未开放契约、`auth status/logout` 已完成；`auth login` 真实 OAuth、`install/update`、`purge` 仍缺）。
 4. Plugin shell 管理面和 marketplace 本地操作。
 5. session-id/fork/name、worktree/tmux、background supervisor/agent view。
 6. hooks/structured stream、settings schema、permission/sandbox 完整字段。

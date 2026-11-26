@@ -831,7 +831,7 @@ pub fn configure_teammate_from_cli(argv: &[String]) -> Result<(), String> {
 }
 
 /// Maps to CC `main.tsx#loadSettingsFromFlag`.
-fn load_settings_from_flag(settings_value: &str) -> Result<(), String> {
+pub(crate) fn load_settings_from_flag(settings_value: &str) -> Result<(), String> {
     use sha2::Digest;
 
     let trimmed = settings_value.trim();
@@ -856,14 +856,30 @@ fn load_settings_from_flag(settings_value: &str) -> Result<(), String> {
         } else {
             std::env::current_dir().unwrap_or_default().join(path)
         };
-        match std::fs::read_to_string(&resolved) {
-            Ok(_) => resolved.canonicalize().unwrap_or(resolved),
+        match std::fs::metadata(&resolved) {
+            Ok(metadata) if metadata.is_dir() => {
+                return Err(format!(
+                    "Error: Cannot use settings file (EISDIR: illegal operation on a directory, read): {}",
+                    resolved.display()
+                ));
+            }
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(format!(
+                    "Error: Cannot use settings file (Not a regular file (device, FIFO, or socket)): {}",
+                    resolved.display()
+                ));
+            }
+            Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(format!(
                     "Error: Settings file not found: {}",
                     resolved.display()
                 ));
             }
+            Err(error) => return Err(format!("Error processing --settings: {error}")),
+        }
+        match std::fs::read_to_string(&resolved) {
+            Ok(_) => resolved.canonicalize().unwrap_or(resolved),
             Err(error) => return Err(format!("Error processing --settings: {error}")),
         }
     };

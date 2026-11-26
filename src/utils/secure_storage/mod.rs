@@ -29,6 +29,11 @@ pub(crate) trait SecureStorageBackend: Send + Sync {
         data: &SecureStorageData,
     ) -> anyhow::Result<SecureStorageUpdate>;
     fn delete(&self) -> anyhow::Result<bool>;
+    /// Explicit logout is deletion-only. It remains available while the
+    /// account-credential write/refresh outlet stays closed, so a user who
+    /// asks to sign out is never told that the local login was removed while
+    /// the credential file remains on disk.
+    fn delete_for_logout(&self) -> anyhow::Result<bool>;
     fn delete_mcp_oauth_credentials(&self) -> anyhow::Result<bool>;
 }
 

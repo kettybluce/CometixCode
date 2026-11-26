@@ -15,6 +15,7 @@
 pub mod add_dir;
 pub mod advisor;
 pub mod agents;
+pub mod auth;
 pub mod auto_mode;
 pub mod branch;
 pub mod btw;

@@ -128,6 +128,13 @@ pub fn dispatch(config: &CliConfig) -> Option<i32> {
         return crate::commands::doctor::maybe_run_doctor_cli(&config.argv);
     }
 
+    // `auth status` is read-only; `auth logout` owns the explicit
+    // deletion-only credential outlet; `auth login` keeps the credential-write
+    // gate closed while matching the command's help/error surface.
+    if config.subcommand.as_deref() == Some("auth") {
+        return crate::commands::auth::maybe_run_auth_cli(&config.argv);
+    }
+
     // Auto mode's local management commands own their stdout/stderr and are
     // intentionally separate from the interactive launch path.
     if config.subcommand.as_deref() == Some("auto-mode") {

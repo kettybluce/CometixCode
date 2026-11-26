@@ -45,7 +45,11 @@ fn delete_credentials(side_effects_enabled: bool) -> anyhow::Result<bool> {
     if !side_effects_enabled {
         return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
     }
-    match crate::utils::fs_operations::get_fs_implementation().unlink_sync(&storage_path) {
+    delete_credentials_file(&storage_path)
+}
+
+fn delete_credentials_file(storage_path: &std::path::Path) -> anyhow::Result<bool> {
+    match crate::utils::fs_operations::get_fs_implementation().unlink_sync(storage_path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
         Err(_) => Ok(false),
@@ -105,6 +109,11 @@ impl SecureStorageBackend for PlainTextStorage {
         delete_credentials(crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED)
     }
 
+    fn delete_for_logout(&self) -> anyhow::Result<bool> {
+        let (_, storage_path) = get_storage_path();
+        delete_credentials_file(&storage_path)
+    }
+
     fn delete_mcp_oauth_credentials(&self) -> anyhow::Result<bool> {
         delete_credentials(crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED)
     }
@@ -129,6 +138,28 @@ mod tests {
 
         assert!(!crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED);
         assert!(PlainTextStorage.delete_mcp_oauth_credentials().unwrap());
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn logout_delete_is_allowed_while_account_writes_stay_closed() {
+        let _lock = TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home =
+            std::env::temp_dir().join(format!("cometix-logout-storage-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let _config_dir = EnvVarGuard::set("CLAUDE_CONFIG_DIR", &home);
+        let path = home.join(".credentials.json");
+        std::fs::write(&path, br#"{"claudeAiOauth":{"accessToken":"x"}}"#).unwrap();
+
+        assert!(
+            PlainTextStorage
+                .update(&serde_json::json!({"claudeAiOauth": {}}))
+                .is_err()
+        );
+        assert!(PlainTextStorage.delete_for_logout().unwrap());
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(home);
     }

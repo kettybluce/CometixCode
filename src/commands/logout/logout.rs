@@ -10,6 +10,11 @@ use crate::utils::process_user_input::process_slash_command::{
 use crate::utils::theme::Theme;
 use iocraft::prelude::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LogoutOutcome {
+    pub removed_account_credentials: bool,
+}
+
 /// Source-shaped local JSX dispatch. The actual cache/credential operation is
 /// completed by the REPL-owned panel callback so its transcript and authVersion
 /// update stay in one UI turn.
@@ -35,15 +40,26 @@ pub fn dispatch(
 
 /// Maps to CC `commands/logout/logout.tsx#performLogout`.
 ///
-/// Source cache invalidations that have a concrete Rust owner are kept here;
-/// secure-storage deletion is the final side-effect outlet and remains closed
-/// unless the existing product gate is explicitly enabled.
+/// Source cache invalidations that have a concrete Rust owner are kept here.
+/// The explicit logout path uses the deletion-only secure-storage outlet, so it
+/// stays usable while account credential writes and refreshes remain closed.
 pub fn perform_logout(clear_onboarding: bool) -> anyhow::Result<()> {
+    perform_logout_status(clear_onboarding).map(|_| ())
+}
+
+/// Shared by the shell `auth logout` command and the in-session `/logout`
+/// panel. Returns whether an account credential was present before deletion;
+/// the shell command uses that to reproduce the upstream "revocation not
+/// confirmed" message when it cannot reach Anthropic.
+pub fn perform_logout_status(clear_onboarding: bool) -> anyhow::Result<LogoutOutcome> {
     let storage = crate::utils::secure_storage::get_secure_storage();
-    if !crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED {
-        return Err(crate::constants::oauth::OAuthCredentialSideEffectsUnavailable.into());
-    }
-    storage.delete()?;
+    let removed_account_credentials = storage.read().is_some_and(|value| {
+        value
+            .get("claudeAiOauth")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|oauth| !oauth.is_empty())
+    });
+    storage.delete_for_logout()?;
     clear_auth_related_caches();
     crate::utils::config::save_global_config(|config| {
         config.oauth_account = None;
@@ -51,7 +67,9 @@ pub fn perform_logout(clear_onboarding: bool) -> anyhow::Result<()> {
             config.has_completed_onboarding = Some(false);
         }
     })?;
-    Ok(())
+    Ok(LogoutOutcome {
+        removed_account_credentials,
+    })
 }
 
 /// Maps to CC `commands/logout/logout.tsx#clearAuthRelatedCaches` for the
@@ -108,13 +126,25 @@ pub fn LogoutCommand<'a>(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn perform_logout_stays_closed_before_any_credential_mutation() {
+    fn logout_delete_stays_available_while_account_writes_are_closed() {
+        let _lock = crate::utils::test_env::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root =
+            std::env::temp_dir().join(format!("cometix-logout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let _config_dir = crate::utils::test_env::EnvVarGuard::set("CLAUDE_CONFIG_DIR", &root);
+        let credentials = root.join(".credentials.json");
+        std::fs::write(
+            &credentials,
+            br#"{"claudeAiOauth":{"accessToken":"test"}}"#,
+        )
+        .unwrap();
+
         assert!(!crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED);
-        let error = super::perform_logout(true).expect_err("logout gate must be closed");
-        assert!(
-            error
-                .downcast_ref::<crate::constants::oauth::OAuthCredentialSideEffectsUnavailable>()
-                .is_some()
-        );
+        let outcome = super::perform_logout_status(false).unwrap();
+        assert!(outcome.removed_account_credentials);
+        assert!(!credentials.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

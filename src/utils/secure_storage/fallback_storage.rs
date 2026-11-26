@@ -42,6 +42,12 @@ impl SecureStorageBackend for FallbackStorage {
         Ok(primary_success || secondary_success)
     }
 
+    fn delete_for_logout(&self) -> anyhow::Result<bool> {
+        let primary_success = self.primary.delete_for_logout()?;
+        let secondary_success = self.secondary.delete_for_logout()?;
+        Ok(primary_success || secondary_success)
+    }
+
     fn delete_mcp_oauth_credentials(&self) -> anyhow::Result<bool> {
         let primary_success = self.primary.delete_mcp_oauth_credentials()?;
         let secondary_success = self.secondary.delete_mcp_oauth_credentials()?;

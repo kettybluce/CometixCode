@@ -95,6 +95,10 @@ impl SecureStorageBackend for MacOsKeychainStorage {
         self.delete_with_gate(crate::constants::oauth::OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED)
     }
 
+    fn delete_for_logout(&self) -> anyhow::Result<bool> {
+        self.delete_with_gate(true)
+    }
+
     fn delete_mcp_oauth_credentials(&self) -> anyhow::Result<bool> {
         self.delete_with_gate(crate::constants::oauth::MCP_OAUTH_CREDENTIAL_SIDE_EFFECTS_ENABLED)
     }

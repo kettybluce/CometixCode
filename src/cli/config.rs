@@ -231,6 +231,7 @@ impl CliConfig {
                     && !self.is_live_mcp_command()
                     && self.subcommand.as_deref() != Some("doctor")
                     && self.subcommand.as_deref() != Some("auto-mode")
+                    && self.subcommand.as_deref() != Some("auth")
                     && self.subcommand.as_deref() != Some("import"))
                     || self.worktree
                     || self.tmux
@@ -283,6 +284,7 @@ impl CliConfig {
             && !self.is_live_mcp_command()
             && sub != "doctor"
             && sub != "auto-mode"
+            && sub != "auth"
             && sub != "import"
         {
             reasons.push(sub.clone());
@@ -403,6 +405,7 @@ Live:
       mcp login <name>              Authenticate with an MCP server
       mcp logout <name>             Clear stored MCP OAuth credentials
       mcp add-json <name> <json|->  Add an MCP server; '-' reads JSON from stdin
+      auth [command]             Manage authentication (status/logout; login unavailable)
       doctor                     Check installation health (text report)
       auto-mode [command]        Inspect or reset auto mode configuration
       import [options] [source]  Import config from another agent (unavailable in 2.1.332)
@@ -414,7 +417,7 @@ Live:
 
 Unimplemented (parsed, then exit 1):
       --session-id / --fork-session
-      Subcommands: mcp (except add/add-from-claude-desktop/add-json/get/list/login/logout/remove/reset-project-choices/serve), auth, plugin, update, …
+      Subcommands: mcp (except add/add-from-claude-desktop/add-json/get/list/login/logout/remove/reset-project-choices/serve), plugin, update, …
       --init / --init-only / --maintenance
       --worktree / --tmux / --remote / --bg / daemon
 "
