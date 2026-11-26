@@ -55,7 +55,13 @@ export CARGO_PROFILE_TEST_DEBUG=0
 export CARGO_INCREMENTAL=0
 cd -- "$repo_root"
 
-printf 'Limits: 1 logical CPU, 3 GiB memory maximum, no swap; one task at a time.\n' >&2
+memory_high=${COMETIX_MEMORY_HIGH:-3G}
+memory_max=${COMETIX_MEMORY_MAX:-3G}
+memory_swap_max=${COMETIX_MEMORY_SWAP_MAX:-0}
+
+printf 'Limits: 1 logical CPU, %s memory high, %s memory maximum, %s swap; one task at a time.\n' \
+    "$memory_high" "$memory_max" "$memory_swap_max" >&2
 systemd-run --user --scope --quiet --unit="cometix-dev-$$" \
-    -p CPUQuota=100% -p MemoryHigh=3G -p MemoryMax=3G -p MemorySwapMax=0 -p IOWeight=10 \
+    -p CPUQuota=100% -p MemoryHigh="$memory_high" -p MemoryMax="$memory_max" \
+    -p MemorySwapMax="$memory_swap_max" -p IOWeight=10 \
     taskset --cpu-list "$cpu_id" nice -n 15 ionice -c 3 "$@"

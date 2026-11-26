@@ -54,3 +54,18 @@ bash scripts/limited-run.sh python3 scripts/compare-cli.py \
 - 原版探针与采样使用的临时 HOME/cwd 自动清理；本任务生成的 Python 缓存已清理。
 - 独立 compiler allocator 仅解包在 `.tmp/` 供实验，没有安装系统软件包或修改 shell 默认环境。
 - 未提交的功能代码继续留在工作区，验证完成后单独提交；本阶段提交不包含这些功能改动。
+
+## 2026-11-26 补记：完整开发构建与真实测试
+
+P0-A 当时记录的“完整开发构建未通过”仍是历史事实；本轮在同一源码基线上补充了可完成的构建配置和真实测试结果。
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 3 GiB 构建 | 失败 | `monomorphization_collector_root_collections` 后停滞，随后被 SIGKILL；3 GiB 硬限额不足以容纳单体主库单态化 |
+| 4 GiB 构建 | 未完成 | 软上限低于工作集，内核持续回收；系统态 CPU 约为用户态 4 倍，图遍历数分钟无阶段输出 |
+| 5 GiB 构建 | 通过 | Rust 1.88、20m01s、峰值 RSS 5,077,244 KiB、无 swap、退出码 0；`monomorphization_collector_graph_walk` 约 28s |
+| 真实 CLI/MCP 测试 | 通过 | `mcp_serve` 5/5、`cli_parser_contract` 47/47、`cli_value_contract` 4/4、`doctor_cli` 3/3、`mcp_add_json` 35/35 |
+
+产物：`target/msrv-1.88/debug/cometix`，SHA-256 `168bccd784f63f405b999f87a2e3d1dfcafc4fa22497dab97ad594088f8e275c`。`scripts/limited-run.sh` 新增 `COMETIX_MEMORY_HIGH`、`COMETIX_MEMORY_MAX`、`COMETIX_MEMORY_SWAP_MAX` 覆盖；默认仍是 3 GiB，本轮只在完整构建命令上临时使用 5 GiB，未改常规约束、未启用 swap。
+
+该补记不改变 release 构建和原版性能比较仍未执行的结论。debug 产物只用于开发验证，不能用于性能排名。
